@@ -49,11 +49,28 @@ static McpRoslynOptions ParseArgs(string[] args)
     }
 
     if (string.IsNullOrWhiteSpace(solution))
-        throw new ArgumentException("--solution <path> is required");
-    if (!File.Exists(solution))
+        solution = DiscoverSolution();
+    else if (!File.Exists(solution))
         throw new FileNotFoundException($"Solution file not found: {solution}");
 
     return new McpRoslynOptions { SolutionPath = solution, LogLevel = logLevel };
+}
+
+static string DiscoverSolution()
+{
+    var dir = new DirectoryInfo(Environment.CurrentDirectory);
+    while (dir is not null)
+    {
+        var solutions = dir.GetFiles("*.sln")
+            .Concat(dir.GetFiles("*.slnx"))
+            .OrderBy(f => f.Extension, StringComparer.OrdinalIgnoreCase) // .sln before .slnx
+            .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (solutions.Count > 0) return solutions[0].FullName;
+        dir = dir.Parent;
+    }
+    throw new FileNotFoundException(
+        $"No --solution provided and no .sln or .slnx found by walking up from {Environment.CurrentDirectory}");
 }
 
 internal sealed class WorkspaceLoaderHostedService(IWorkspaceService ws) : IHostedService

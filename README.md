@@ -6,18 +6,38 @@ MCP server exposing C# symbol-level navigation (find-references, goto-definition
 
 ## Wiring into Claude Code
 
-After running `dotnet publish` (see below), add to your project's `.mcp.json`:
+mcpRoslyn supports two modes:
 
-````json
+### Global (user-level mcp.json) — recommended for multi-project work
+
+Register once in `~/.claude/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "mcpRoslyn": {
+      "command": "c:\\projects\\mcpRoslyn\\bin\\publish\\mcpRoslyn.exe"
+    }
+  }
+}
+```
+
+mcpRoslyn discovers the solution by walking up from Claude Code's CWD looking for `*.sln` or `*.slnx`. The first one found is loaded.
+
+### Per-project (`.mcp.json` in the project root) — pin to one solution
+
+Useful when a project contains multiple `.sln` files and you want to force a specific one:
+
+```json
 {
   "mcpServers": {
     "mcpRoslyn": {
       "command": "c:\\projects\\mcpRoslyn\\bin\\publish\\mcpRoslyn.exe",
-      "args": ["--solution", "c:\\path\\to\\your.sln"]
+      "args": ["--solution", "c:\\path\\to\\specific.sln"]
     }
   }
 }
-````
+```
 
 ## Building
 
