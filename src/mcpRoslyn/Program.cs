@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using mcpRoslyn.Options;
+using mcpRoslyn.Workspace;
 
 // MUST be first - before any Microsoft.CodeAnalysis.* type is touched.
 MSBuildLocator.RegisterDefaults();
@@ -17,6 +18,9 @@ builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 builder.Logging.SetMinimumLevel(options.LogLevel);
 
 builder.Services.AddSingleton(options);
+
+builder.Services.AddSingleton<IWorkspaceService, WorkspaceService>();
+builder.Services.AddHostedService<WorkspaceLoaderHostedService>();
 
 builder.Services
     .AddMcpServer()
@@ -50,4 +54,10 @@ static McpRoslynOptions ParseArgs(string[] args)
         throw new FileNotFoundException($"Solution file not found: {solution}");
 
     return new McpRoslynOptions { SolutionPath = solution, LogLevel = logLevel };
+}
+
+internal sealed class WorkspaceLoaderHostedService(IWorkspaceService ws) : IHostedService
+{
+    public Task StartAsync(CancellationToken ct) => ws.LoadAsync(ct);
+    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
 }
