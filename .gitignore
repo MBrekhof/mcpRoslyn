@@ -1,0 +1,32 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+*.cache
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+## Publish
+publish/
+*.pubxml
+*.publishproj
+PublishProfiles/
+
+## VS / Rider
+.vs/
+.idea/
+*.swp
+
+## OS
+Thumbs.db
+.DS_Store
+
+## Test results
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
