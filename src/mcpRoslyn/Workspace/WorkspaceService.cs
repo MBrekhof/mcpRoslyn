@@ -40,7 +40,21 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         try
         {
             if (_solution is null) throw new InvalidOperationException("Workspace not loaded.");
-            // mtime refresh added in Task 7
+
+            foreach (var doc in _solution.Projects.SelectMany(p => p.Documents).ToList())
+            {
+                if (doc.FilePath is null || !File.Exists(doc.FilePath)) continue;
+                var diskMtime = File.GetLastWriteTimeUtc(doc.FilePath);
+                if (_mtimeCache.TryGetValue(doc.Id, out var cachedMtime) && cachedMtime >= diskMtime)
+                    continue;
+
+                var text = await File.ReadAllTextAsync(doc.FilePath, ct);
+                _solution = _solution.WithDocumentText(
+                    doc.Id,
+                    Microsoft.CodeAnalysis.Text.SourceText.From(text));
+                _mtimeCache[doc.Id] = diskMtime;
+            }
+
             return _solution;
         }
         finally { _gate.Release(); }
