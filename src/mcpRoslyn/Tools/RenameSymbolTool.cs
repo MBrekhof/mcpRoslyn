@@ -27,8 +27,8 @@ internal sealed class RenameSymbolTool(IWorkspaceService ws, ILogger<RenameSymbo
     public Task<Contracts.ToolResult<RenameSymbolResult>> InvokeAsync(
         string filePath, int line, int column,
         string newName,
-        bool applyEdits,
-        CancellationToken ct)
+        bool applyEdits = false,
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);

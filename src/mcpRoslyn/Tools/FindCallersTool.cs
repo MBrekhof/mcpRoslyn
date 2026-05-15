@@ -18,8 +18,8 @@ internal sealed class FindCallersTool(IWorkspaceService ws, ILogger<FindCallersT
     [Description("Returns all methods that invoke the method at the cursor. Pass either (filePath, line, column) OR symbolId. transitive=true follows call chains recursively.")]
     public Task<Contracts.ToolResult<FindCallersResult>> InvokeAsync(
         string? filePath, int? line, int? column, string? symbolId,
-        bool transitive,
-        CancellationToken ct)
+        bool transitive = false,
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);

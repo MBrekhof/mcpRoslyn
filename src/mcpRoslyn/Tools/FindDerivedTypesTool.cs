@@ -17,8 +17,8 @@ internal sealed class FindDerivedTypesTool(IWorkspaceService ws, ILogger<FindDer
     [Description("For a class, returns all subclasses. For an interface, returns all derived interfaces. Use find_implementations for concrete implementations of an interface.")]
     public Task<Contracts.ToolResult<FindDerivedTypesResult>> InvokeAsync(
         string? filePath, int? line, int? column, string? symbolId,
-        bool transitive,
-        CancellationToken ct)
+        bool transitive = false,
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);

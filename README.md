@@ -2,7 +2,7 @@
 
 MCP server exposing C# symbol-level navigation (find-references, goto-definition, find-implementations, semantic-search, etc.) to AI coding agents. Wraps Roslyn's `MSBuildWorkspace` and serves over stdio.
 
-**Status:** pre-implementation. Design is approved and lives at [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md).
+**Status:** v1 implemented and accepted. Design at [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md), implementation plan at [`docs/plans/2026-05-15-mcproslyn-implementation.md`](docs/plans/2026-05-15-mcproslyn-implementation.md), acceptance log at [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md).
 
 ## Wiring into Claude Code
 
