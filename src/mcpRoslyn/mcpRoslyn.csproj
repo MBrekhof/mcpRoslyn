@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="mcpRoslyn.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Build.Locator" Version="1.11.2" />
     <!-- Microsoft.Build.Framework is a transitive dep of MSBuild.Locator.
          Must be excluded from runtime assets to avoid assembly-load conflicts (MSBL001). -->
