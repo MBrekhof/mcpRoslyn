@@ -6,11 +6,27 @@
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <PublishSingleFile>true</PublishSingleFile>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="mcpRoslyn.Tests" />
   </ItemGroup>
+
+  <!-- Roslyn's MSBuildWorkspace spawns a separate process for BuildHost.
+       These content files must stay as loose files on disk (not bundled into the single-file exe),
+       otherwise BuildHostProcessManager cannot find them at runtime.
+       Mark them ExcludeFromSingleFile before _ComputeFilesToBundle processes ResolvedFileToPublish. -->
+  <Target Name="ExcludeBuildHostFromSingleFile" BeforeTargets="_ComputeFilesToBundle">
+    <ItemGroup>
+      <ResolvedFileToPublish Update="@(ResolvedFileToPublish)"
+                             ExcludeFromSingleFile="true"
+                             Condition="$([System.String]::Copy('%(RelativePath)').StartsWith('BuildHost-'))" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Build.Locator" Version="1.11.2" />
