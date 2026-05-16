@@ -40,6 +40,18 @@ public sealed class SymbolIndex
                     foreach (var key in CandidateKeys(attr.AttributeClass))
                         Add(_byAttribute, key, entry);
                 }
+
+                if (sym is IMethodSymbol method)
+                {
+                    foreach (var key in CandidateKeys(method.ReturnType))
+                        Add(_byReturnType, key, entry);
+
+                    foreach (var param in method.Parameters)
+                    {
+                        foreach (var key in CandidateKeys(param.Type))
+                            Add(_byParameterType, key, entry);
+                    }
+                }
             }
         });
         await Task.WhenAll(tasks);
@@ -67,10 +79,36 @@ public sealed class SymbolIndex
     }
 
     public IReadOnlyList<Contracts.SymbolInfo> QueryReturnType(string target, Solution currentSolution, CancellationToken ct = default)
-        => Array.Empty<Contracts.SymbolInfo>();
+    {
+        List<IndexedSymbol> bucket;
+        HashSet<DocumentId> dirty;
+        lock (_gate)
+        {
+            bucket = _byReturnType.TryGetValue(target, out var list) ? new(list) : new();
+            dirty = new(_dirty);
+        }
+
+        return MergeWithDirtyWalk(
+            bucket, dirty, currentSolution,
+            predicate: sym => sym is IMethodSymbol m && MatchesTypeName(m.ReturnType, target),
+            ct);
+    }
 
     public IReadOnlyList<Contracts.SymbolInfo> QueryParameterType(string target, Solution currentSolution, CancellationToken ct = default)
-        => Array.Empty<Contracts.SymbolInfo>();
+    {
+        List<IndexedSymbol> bucket;
+        HashSet<DocumentId> dirty;
+        lock (_gate)
+        {
+            bucket = _byParameterType.TryGetValue(target, out var list) ? new(list) : new();
+            dirty = new(_dirty);
+        }
+
+        return MergeWithDirtyWalk(
+            bucket, dirty, currentSolution,
+            predicate: sym => sym is IMethodSymbol m && m.Parameters.Any(p => MatchesTypeName(p.Type, target)),
+            ct);
+    }
 
     // ---------- Helpers ----------
 
