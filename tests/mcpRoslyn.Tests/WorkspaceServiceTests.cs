@@ -61,4 +61,22 @@ public class WorkspaceServiceTests
             File.WriteAllText(doc.FilePath!, backup);
         }
     }
+
+    [Test]
+    public async Task LoadAsync_warmup_populates_project_compilations()
+    {
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+
+        var solution = await sut.GetFreshSolutionAsync();
+        foreach (var project in solution.Projects)
+        {
+            project.TryGetCompilation(out var compilation).Should().BeTrue(
+                "warm-up should have cached the compilation for {0}", project.Name);
+            compilation.Should().NotBeNull();
+        }
+    }
 }

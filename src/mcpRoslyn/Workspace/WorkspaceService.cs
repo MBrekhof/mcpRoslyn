@@ -12,8 +12,10 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     private MSBuildWorkspace? _workspace;
     private Solution? _solution;
     private readonly Dictionary<DocumentId, DateTime> _mtimeCache = new();
+    private Task _warmupTask = Task.CompletedTask;
 
     public int LoadedProjectCount => _solution?.Projects.Count() ?? 0;
+    public Task WarmupTask => _warmupTask;
 
     public async Task LoadAsync(CancellationToken ct = default)
     {
@@ -77,6 +79,38 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
             if (doc.FilePath is null || !File.Exists(doc.FilePath)) continue;
             _mtimeCache[doc.Id] = File.GetLastWriteTimeUtc(doc.FilePath);
         }
+
+        // kick background pre-compilation; do NOT await
+        var solutionSnapshot = _solution;
+        _warmupTask = Task.Run(() => WarmupAsync(solutionSnapshot, ct), ct);
+    }
+
+    private async Task WarmupAsync(Solution solution, CancellationToken ct)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var tasks = solution.Projects.Select(async project =>
+        {
+            var projectSw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var compilation = await project.GetCompilationAsync(ct);
+                log.LogInformation(
+                    "Warmed {Project} in {Elapsed} ms ({DiagCount} diagnostics)",
+                    project.Name,
+                    projectSw.ElapsedMilliseconds,
+                    compilation?.GetDiagnostics(ct).Length ?? 0);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Warm-up failed for project {Project}", project.Name);
+            }
+        });
+        await Task.WhenAll(tasks);
+        log.LogInformation(
+            "Warm-up complete: {ProjectCount} projects in {Elapsed} ms",
+            solution.Projects.Count(),
+            sw.ElapsedMilliseconds);
     }
 
     public async ValueTask DisposeAsync()
