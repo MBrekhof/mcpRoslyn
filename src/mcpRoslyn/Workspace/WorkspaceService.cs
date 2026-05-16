@@ -16,6 +16,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     private Task _warmupTask = Task.CompletedTask;
     private readonly List<WorkspaceLoadDiagnostic> _diagnostics = new();
     private readonly object _diagnosticsLock = new();
+    private SymbolIndex? _symbolIndex;
 
     public int LoadedProjectCount => _solution?.Projects.Count() ?? 0;
     public Task WarmupTask => _warmupTask;
@@ -24,6 +25,9 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     {
         get { lock (_diagnosticsLock) return _diagnostics.ToArray(); }
     }
+
+    public SymbolIndex SymbolIndex
+        => _symbolIndex ?? throw new InvalidOperationException("Workspace not loaded.");
 
     public async Task LoadAsync(CancellationToken ct = default)
     {
@@ -63,6 +67,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
                     doc.Id,
                     Microsoft.CodeAnalysis.Text.SourceText.From(text));
                 _mtimeCache[doc.Id] = diskMtime;
+                _symbolIndex?.MarkDirty(doc.Id);
             }
 
             return _solution;
@@ -73,6 +78,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     private async Task LoadUnsafeAsync(CancellationToken ct)
     {
         lock (_diagnosticsLock) _diagnostics.Clear();
+        _symbolIndex = new SymbolIndex();
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         _workspace = MSBuildWorkspace.Create();
@@ -125,6 +131,26 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
             "Warm-up complete: {ProjectCount} projects in {Elapsed} ms",
             solution.Projects.Count(),
             sw.ElapsedMilliseconds);
+
+        // Index build runs after compilations are cached so per-project walks
+        // reuse warmed state. Failures isolated; one bad project doesn't
+        // poison the whole index.
+        if (_symbolIndex is not null)
+        {
+            var indexSw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                await _symbolIndex.BuildAsync(solution, ct);
+                log.LogInformation(
+                    "Symbol index built in {Elapsed} ms",
+                    indexSw.ElapsedMilliseconds);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Symbol index build failed; semantic_search will fall back to live walks");
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()

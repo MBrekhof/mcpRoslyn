@@ -23,4 +23,11 @@ public interface IWorkspaceService
     /// Cleared at the start of each <see cref="LoadAsync"/>/<see cref="ReloadAsync"/>.
     /// </summary>
     IReadOnlyList<WorkspaceLoadDiagnostic> Diagnostics { get; }
+
+    /// <summary>
+    /// Shared symbol index supporting fast semantic_search has-attribute: / returns: / parameter-type: queries.
+    /// Built during warm-up; queries fall back to walking dirty documents to preserve always-fresh semantics.
+    /// Throws InvalidOperationException if accessed before LoadAsync completes.
+    /// </summary>
+    SymbolIndex SymbolIndex { get; }
 }
