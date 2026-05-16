@@ -38,6 +38,14 @@ Per-call refresh (`GetFreshSolutionAsync`): walk every known `Document`, compare
 
 **Not auto-detected** (require `reload_workspace`): new .cs files on disk, deleted .cs files, .csproj edits, new projects in .sln.
 
+### SymbolIndex
+
+A sibling `SymbolIndex` (built during warm-up, owned by `WorkspaceService`, exposed via `IWorkspaceService.SymbolIndex`) backs the `has-attribute:`, `returns:`, and `parameter-type:` patterns of `semantic_search`. Three dictionaries keyed by display string AND fully-qualified metadata name, populated by a parallel-per-project walk after `WarmupAsync`'s compilations finish.
+
+Queries hit the dictionary in O(matches). Always-fresh semantics are preserved via a dirty-doc set populated whenever `GetFreshSolutionAsync` calls `WithDocumentText`: the query path filters out cached entries whose `DeclaringDocs` intersect the dirty set, then walks just the dirty documents fresh and merges results. `derives-from:` / `implements:` bypass the index — they use Roslyn's `FindDerivedClassesAsync` / `FindImplementationsAsync`, which are already O(matches).
+
+`SymbolIndex` is reconstructed (dirty set discarded) on `ReloadAsync`. The class is `public sealed` because it's exposed on the public `IWorkspaceService` interface, but consumers should treat it as an implementation detail of `semantic_search`.
+
 ## Tool surface (12 tools)
 
 Every tool returns structured JSON wrapped in `ToolResult<T>` (`Result` or `Error`). Locations use 1-based line/column. Symbol identifiers use Roslyn's `DocumentationCommentId` format. Navigation tools accept either `{ filePath, line, column }` or `{ symbolId }`.

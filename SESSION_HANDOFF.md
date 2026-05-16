@@ -1,63 +1,71 @@
 # Session Handoff
 
-**Last updated:** 2026-05-16 (end of autonomous v1.1 cleanup session)
+**Last updated:** 2026-05-16 (end of SymbolIndex shipping session — v1.2)
 
 ## Where things stand
 
-- **v1.1 follow-ups complete** for everything except the `semantic_search` attribute index. 4 of the 5 acceptance-driven v1.1 items shipped this session.
-- **Repo public** on GitHub: https://github.com/MBrekhof/mcpRoslyn — MIT licensed, README is current.
-- Branch `main`, working tree clean, fully pushed to `origin`.
-- **38 tests passing** (was 30 at start of day, +8 across the warm-up and diagnostics work).
+- **v1.2 shipped:** `SymbolIndex` cuts `semantic_search has-attribute:` / `returns:` / `parameter-type:` from O(symbols-per-call) to O(matches) via a per-load index built during warm-up. Always-fresh semantics preserved via a dirty-doc walk on every query.
+- Branch `main`, working tree clean, fully pushed to `origin` (`d941e02`). Repo public on GitHub.
+- **Tests:** 46 passing (was 38 at start of session, +8 new in `SymbolIndexTests`).
+- **All v1.1 acceptance-driven follow-ups are now closed.**
 
-## What shipped this session (in order)
+## What shipped this session
 
 Earlier today (with you):
-- `062834e` design spec — warm-up pre-compilation
+- `062834e` design spec — warm-up
 - `d249744` implementation plan — warm-up
-- `a22cd8d` feat: background warm-up pre-compilation (the headline 4.5× speedup)
-- `7ff11d0` test: pin LoadAsync-returns-before-warmup contract
+- `a22cd8d` feat: background warm-up pre-compilation (4.5× first-query speedup)
+- `7ff11d0` test: LoadAsync returns before warm-up completes
 - `e993af5` docs: v1.1 warm-up acceptance log
-- `a8a970a` docs: mark warm-up done, add `--log-file` follow-up
-- `42df6b7` docs: release prep — LICENSE (MIT), README expansion, ARCHITECTURE, SESSION_HANDOFF
-- `e712244` chore: gitignore `excalidraw.log`
+- `a8a970a` docs: TODO closeout + `--log-file` follow-up
+- `42df6b7` release prep — LICENSE (MIT), README, ARCHITECTURE, SESSION_HANDOFF
+- `e712244` chore: gitignore excalidraw.log
 
-Autonomous run (while you were away):
-- `421cc8f` feat: `--log-file <path>` flag for persistent ILogger output
-- `f938fb0` feat: enrich `find_callers` SYMBOL_NOT_FOUND with `workspace_symbol` hint
-- `417e86b` feat: surface MSBuild `WorkspaceFailed` events as `WorkspaceLoadDiagnostic`
+Autonomous run #1 (`--log-file`, `find_callers` hint, MSBuild diagnostics):
+- `421cc8f` feat: `--log-file <path>` flag
+- `f938fb0` feat: `find_callers` SYMBOL_NOT_FOUND hint
+- `417e86b` feat: MSBuild `WorkspaceLoadDiagnostic` surfacing
+- `34302ae` docs: close shipped items
 
-## Material changes in the autonomous run
+v1.2 SymbolIndex (this run):
+- `204013c` docs: SymbolIndex design spec
+- `fed01ac` docs: SymbolIndex implementation plan
+- `b593f89` feat: SymbolIndex skeleton wired into WorkspaceService lifecycle
+- `0957af7` feat: SymbolIndex.QueryAttribute backed by per-project parallel build
+- `3fdc4af` feat: SymbolIndex covers returns: and parameter-type:
+- `744f36f` test: dirty walk + reload + partial-class correctness
+- `d941e02` feat: route has-attribute/returns/parameter-type via SymbolIndex
+- *(this commit)* docs: TODO + ARCHITECTURE + handoff for v1.2
 
-1. **`--log-file <path>`** — new optional CLI flag. New `mcpRoslyn.Logging.FileLoggerProvider` (custom `ILoggerProvider`) appends to the file in thread-safe mode, creates parent dirs on demand, formats as `{iso-timestamp} {level} {category} - {message}` with exceptions on the following line. Wired via `builder.Logging.AddProvider(new FileLoggerProvider(path))` in `Program.cs` when the flag is set. 4 new tests.
+## Material changes in v1.2
 
-2. **`find_callers` hint** — when `SYMBOL_NOT_FOUND` is returned from either the symbolId path or the cursor-position path, the `ToolError.Hint` field is populated with a recovery suggestion. The symbolId path points at `workspace_symbol` (the duetGPT acceptance case); the cursor path suggests verifying the position or falling back to `workspace_symbol`. Redundant final null-check removed; each branch now returns inline. 1 new test.
+**New class** `mcpRoslyn.Workspace.SymbolIndex` — public sealed because it's exposed on the public `IWorkspaceService` interface. Owns three dictionaries (`_byAttribute`, `_byReturnType`, `_byParameterType`) keyed by both display string AND fully-qualified metadata name (mirrors the existing `MatchesTypeName` fallback). `BuildAsync` runs after `WarmupAsync`'s compilations finish, walking all symbols in parallel per project. `MarkDirty(DocumentId)` is called from `GetFreshSolutionAsync` whenever it replaces a document via `WithDocumentText`. `QueryAttribute` / `QueryReturnType` / `QueryParameterType` filter out cached entries whose `DeclaringDocs` intersect the dirty set, then walk just the dirty documents fresh and merge — preserves the v1 always-fresh semantics with sub-100ms cost on the 95% path (no edits since load).
 
-3. **MSBuild diagnostics surfacing** — `WorkspaceFailed` events now accumulate in a list on `WorkspaceService`. New `IWorkspaceService.Diagnostics` property exposes a snapshot (`IReadOnlyList<WorkspaceLoadDiagnostic>`). List is cleared at the top of every `LoadUnsafeAsync`. `ReloadResult` gains a `Diagnostics` field, so `reload_workspace` callers can see exactly which projects failed and why. 3 new tests including a synthetic-broken-`.sln` case that lives in a temp dir (does not pollute the existing fixture). DTO is named `WorkspaceLoadDiagnostic` to avoid colliding with `Microsoft.CodeAnalysis.WorkspaceDiagnostic`.
+**Public surface change** on `IWorkspaceService`: added `SymbolIndex SymbolIndex { get; }` (throws if accessed before `LoadAsync` completes). Spec deviation: the spec wanted `SymbolIndex` to be `internal`, but a public interface property forces a public type — accepted the tradeoff.
 
-## What I did NOT do (and why)
+**`SemanticSearchTool` refactor**: the three slow `case` blocks now delegate to `Workspace.SymbolIndex.QueryX`. `WalkAllSymbols` and `MatchesTypeName` static helpers removed from this file — they live in `SymbolIndex` now. `derives-from:` / `implements:` / invalid-pattern paths untouched.
 
-- **`semantic_search` attribute index** — Larger change with real design tradeoffs (eager vs lazy build, invalidation on reload-only or per-edit, memory cost on huge solutions). Wanted your input on the lifecycle model before committing. The current ~7.7 s `has-attribute:` time on duetGPT is the next obvious perf win.
-- **Re-measure `find_implementations`** — Needed another acceptance run against a live duetGPT Claude Code session; can't do that autonomously without killing your active sessions.
-- **Real-session validation** — Inherently requires you. Acceptance logs covered query correctness, not agent-loop ergonomics.
-- **Fix the `WorkspaceFailed` obsolete warning (CS0618)** — Out of scope for any of the TODO items; flagged as a nice-to-have.
+**`TestHost.CreateAsync` change**: now also awaits `WarmupTask` after `LoadAsync`. Without this fix, the `SemanticSearchToolTests` regressions were intermittent — tool calls were racing the background index build and seeing empty buckets. The fix is generic for any future index-dependent tool.
 
 ## What's next
 
-See [`TODO.md`](TODO.md). Open work, in priority order:
+All v1.1 acceptance-driven items are closed. Remaining open work in [`TODO.md`](TODO.md):
 
-1. **`semantic_search` attribute index** — the last meaningful v1.1 perf item. Needs a quick design conversation: eager (build at load + post-warmup) vs lazy (build on first `has-attribute:` call). Lifetime: invalidate on reload only? On document changes? My instinct: eager, invalidate on reload only, memory cost is probably negligible for any solution that fits in `MSBuildWorkspace` to begin with.
-2. **Nice-to-haves spotted along the way** (in [`TODO.md`](TODO.md)):
-   - Extract `ProjectName` from `WorkspaceLoadDiagnostic.Message` (regex on the embedded csproj path).
-   - Migrate off `Workspace.WorkspaceFailed` to `RegisterWorkspaceFailedHandler` (removes the CS0618).
-   - Re-measure `find_implementations` to confirm v1.1 acceptance's 300→832 ms wasn't noise.
-3. **Real-session validation** — use mcpRoslyn in one duetGPT feature task; capture friction.
+1. **Re-measure on duetGPT.** Republish exe (close any running `mcpRoslyn.exe` first; PID from `tasklist`), restart a Claude Code session in `c:\projects\duetgpt`, re-run the v1 reference queries with `--log-file` so the warm-up + index-build timings are captured. Predictions:
+   - `has-attribute:McpServerToolType`: 11 049 ms (v1) → 7 745 ms (v1.1) → **sub-100 ms (v1.2)**
+   - First `find_references`: should still hit the warm-up 4.5× win from v1.1
+   - `find_implementations` 300 → 832 ms regression worth confirming on a fresh run
+2. **Nice-to-haves spotted along the way** (see [`TODO.md`](TODO.md)):
+   - Extract `ProjectName` from `WorkspaceLoadDiagnostic.Message`.
+   - Migrate off the obsolete `Workspace.WorkspaceFailed` to `RegisterWorkspaceFailedHandler` (removes CS0618).
+3. **Real-session validation.** Use mcpRoslyn in one duetGPT feature task; capture friction. Acceptance logs cover canned-query correctness, not agent-loop ergonomics.
 
 ## Known limitations / gotchas (unchanged)
 
 - **Windows-only.** `MSBuildLocator` and path-comparison code aren't portable yet.
-- **Project-file changes need explicit `reload_workspace`.** Per-call mtime refresh only walks already-known documents; new/deleted .cs files, .csproj edits, and new projects in .sln are NOT auto-detected.
-- **Stderr capture window** is no longer a problem — `--log-file <path>` solves it. Use that for any future diagnostics work.
-- **`duetGPT.LicenseServer` silent drop** is no longer invisible — the diagnostics list will show why it failed to load. Investigate via `reload_workspace` output next time you're in a duetGPT session.
+- **Project-file changes need explicit `reload_workspace`.** Per-call mtime refresh only walks already-known documents. Same for the index — new symbols in new files won't appear until reload.
+- **Stderr capture window** of Claude Code is no longer a problem; use `--log-file <path>`.
+- **`duetGPT.LicenseServer` silent drop** is no longer invisible — check `reload_workspace`'s `Diagnostics` field next time you're in a duetGPT session.
 
 ## Useful commands
 
@@ -69,24 +77,21 @@ dotnet build mcpRoslyn.slnx -c Release
 dotnet test mcpRoslyn.slnx -c Release
 
 # Run a targeted test class
-dotnet test mcpRoslyn.slnx --filter "FullyQualifiedName~FindReferencesToolTests" -c Release
+dotnet test mcpRoslyn.slnx --filter "FullyQualifiedName~SymbolIndexTests" -c Release
 
 # Re-publish the exe (close any running mcpRoslyn.exe first)
 dotnet publish src/mcpRoslyn -c Release -o bin/publish
 
-# Run with persistent logging
+# Run with persistent logging (captures warm-up + index-build timings)
 mcpRoslyn.exe --log-file c:\users\marti\.claude\debug\mcpRoslyn.log
 ```
 
-**Note:** the solution file is `mcpRoslyn.slnx` (new XML format), not `mcpRoslyn.sln`.
+**Note:** solution file is `mcpRoslyn.slnx` (XML format), not `mcpRoslyn.sln`.
 
 ## Reference
 
-- Architecture summary: [`ARCHITECTURE.md`](ARCHITECTURE.md)
+- Architecture summary: [`ARCHITECTURE.md`](ARCHITECTURE.md) (now includes `SymbolIndex` section)
 - Open work: [`TODO.md`](TODO.md)
-- v1 design: [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md)
-- v1 implementation plan: [`docs/plans/2026-05-15-mcproslyn-implementation.md`](docs/plans/2026-05-15-mcproslyn-implementation.md)
-- v1 acceptance: [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md)
-- v1.1 warm-up design: [`docs/plans/2026-05-16-warmup-precompilation-design.md`](docs/plans/2026-05-16-warmup-precompilation-design.md)
-- v1.1 warm-up plan: [`docs/plans/2026-05-16-warmup-precompilation-implementation.md`](docs/plans/2026-05-16-warmup-precompilation-implementation.md)
-- v1.1 warm-up acceptance: [`docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`](docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md)
+- v1 design + plan + acceptance: `docs/plans/2026-05-15-*.md`, `docs/acceptance/2026-05-15-v1-acceptance.md`
+- v1.1 warm-up: `docs/plans/2026-05-16-warmup-precompilation-{design,implementation}.md`, `docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`
+- v1.2 SymbolIndex: `docs/plans/2026-05-16-attribute-index-{design,implementation}.md`
