@@ -1,16 +1,41 @@
 # mcpRoslyn
 
-MCP server exposing C# symbol-level navigation (find-references, goto-definition, find-implementations, semantic-search, etc.) to AI coding agents. Wraps Roslyn's `MSBuildWorkspace` and serves over stdio.
+MCP server exposing C# symbol-level navigation (find-references, goto-definition, find-implementations, semantic-search, rename, etc.) to AI coding agents. Wraps Roslyn's `MSBuildWorkspace` and serves over stdio.
 
-**Status:** v1 implemented and accepted. Design at [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md), implementation plan at [`docs/plans/2026-05-15-mcproslyn-implementation.md`](docs/plans/2026-05-15-mcproslyn-implementation.md), acceptance log at [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md).
+**Status:** v1.1 — warm-up pre-compilation shipped (4.5× faster first query on production-sized solutions). See [`docs/acceptance/`](docs/acceptance/) for measured timings. v1 design at [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md). High-level architecture summary at [`ARCHITECTURE.md`](ARCHITECTURE.md). Open work tracked in [`TODO.md`](TODO.md).
+
+## Why
+
+AI coding agents (Claude Code, Cursor, etc.) typically navigate codebases with text search (`grep`, ripgrep). For C# this loses precision: text search can't distinguish a usage from a definition, can't find implementations of an interface, can't resolve overloads, and can't follow renames. mcpRoslyn gives agents authoritative semantic queries backed by the same engine the C# compiler uses.
+
+## Requirements
+
+- **Windows.** v1 is Windows-only — `MSBuildLocator` and path-comparison code would need work for Linux/Mac.
+- **.NET 10 SDK** (for build) — runtime is bundled into the published self-contained exe.
+- A Claude Code installation (or any MCP-compatible client speaking stdio JSON-RPC).
+
+## Tools (13)
+
+| Category | Tools |
+|---|---|
+| Navigation | `find_references`, `goto_definition`, `workspace_symbol`, `hover` |
+| Structure | `find_implementations`, `find_derived_types`, `list_document_symbols` |
+| Callers | `find_callers` |
+| Diagnostics | `get_compilation_errors`, `get_document_diagnostics` |
+| Search | `semantic_search` (patterns: `derives-from:`, `implements:`, `has-attribute:`, `returns:`, `parameter-type:`) |
+| Editing | `rename_symbol` (preview by default; `applyEdits: true` to write) |
+| Lifecycle | `reload_workspace` |
+| Sanity | `echo` |
+
+Every tool returns structured JSON. Navigation tools accept either `{ filePath, line, column }` (cursor style) or `{ symbolId }` (Roslyn's `DocumentationCommentId` format). `rename_symbol` is the **only** path to file writes — default `applyEdits: false` returns a preview.
 
 ## Wiring into Claude Code
 
 mcpRoslyn supports two modes:
 
-### Global (user-level mcp.json) — recommended for multi-project work
+### Global (user-level `~/.claude/mcp.json`) — recommended for multi-project work
 
-Register once in `~/.claude/mcp.json`:
+Register once:
 
 ```json
 {
@@ -45,6 +70,21 @@ Useful when a project contains multiple `.sln` files and you want to force a spe
 dotnet publish c:\projects\mcpRoslyn\src\mcpRoslyn -c Release -o c:\projects\mcpRoslyn\bin\publish
 ```
 
-Produces `mcpRoslyn.exe` as a single-file self-contained win-x64 binary at the publish path.
-The `BuildHost-netcore\` and `BuildHost-net472\` directories alongside the exe are required — they contain
-the Roslyn MSBuild host process that the workspace loader spawns separately at runtime.
+Produces `mcpRoslyn.exe` as a single-file self-contained win-x64 binary at the publish path. The `BuildHost-netcore\` and `BuildHost-net472\` directories alongside the exe are required — they contain the Roslyn MSBuild host process that the workspace loader spawns separately at runtime.
+
+## Performance
+
+On `duetGPT.sln` (4 loaded projects, 598 .cs files), measured cold-start and first-query times:
+
+| Metric | v1 | v1.1 |
+|---|---|---|
+| Solution load | ~8.5 s | ~2 s (cache-warmed env) |
+| First `find_references` | ~8.4 s | ~1.9 s (4.5× faster — warm-up) |
+| Subsequent queries | 14 ms – 300 ms | similar |
+| `semantic_search has-attribute:` | ~11 s | ~7.7 s (still slow — see [`TODO.md`](TODO.md)) |
+
+Full detail in [`docs/acceptance/`](docs/acceptance/).
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
