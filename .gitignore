@@ -30,3 +30,6 @@ TestResults/
 *.trx
 *.coverage
 *.coveragexml
+
+## Runtime artifacts from MCP servers running in this directory
+excalidraw.log
