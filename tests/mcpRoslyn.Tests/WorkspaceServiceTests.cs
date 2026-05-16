@@ -96,4 +96,84 @@ public class WorkspaceServiceTests
         await sut.WarmupTask;
         sut.WarmupTask.IsCompletedSuccessfully.Should().BeTrue();
     }
+
+    [Test]
+    public async Task LoadAsync_clean_fixture_produces_empty_diagnostics()
+    {
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+
+        await sut.LoadAsync();
+
+        sut.Diagnostics.Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task LoadAsync_broken_solution_captures_diagnostics()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"mcpRoslyn-broken-{Guid.NewGuid()}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            // .sln referencing a project whose .csproj does not exist on disk.
+            // MSBuildWorkspace fires WorkspaceFailed when it cannot evaluate the project file.
+            var slnContent =
+                "Microsoft Visual Studio Solution File, Format Version 12.00\n" +
+                "Project(\"{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}\") = \"Missing\", \"Missing\\Missing.csproj\", \"{11111111-1111-1111-1111-111111111111}\"\n" +
+                "EndProject\n";
+            var slnPath = Path.Combine(tempDir, "Broken.sln");
+            File.WriteAllText(slnPath, slnContent);
+
+            var options = new McpRoslynOptions { SolutionPath = slnPath };
+            var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+
+            await sut.LoadAsync();
+
+            sut.Diagnostics.Should().NotBeEmpty(
+                "MSBuildWorkspace should report a failure for the missing referenced project");
+            sut.Diagnostics.Should().Contain(d =>
+                d.Message.Contains("Missing", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task ReloadAsync_clears_prior_diagnostics()
+    {
+        // First load a broken solution to populate diagnostics, then reload pointing
+        // at the clean fixture and verify the stale diagnostics are gone. We can't
+        // re-point options at runtime, so we use two separate WorkspaceService instances
+        // here — the contract under test is that Clear() runs at the top of LoadUnsafeAsync.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"mcpRoslyn-broken-{Guid.NewGuid()}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var slnContent =
+                "Microsoft Visual Studio Solution File, Format Version 12.00\n" +
+                "Project(\"{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}\") = \"Missing\", \"Missing\\Missing.csproj\", \"{11111111-1111-1111-1111-111111111111}\"\n" +
+                "EndProject\n";
+            var slnPath = Path.Combine(tempDir, "Broken.sln");
+            File.WriteAllText(slnPath, slnContent);
+
+            var options = new McpRoslynOptions { SolutionPath = slnPath };
+            var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+
+            await sut.LoadAsync();
+            sut.Diagnostics.Should().NotBeEmpty();
+            var firstDiagCount = sut.Diagnostics.Count;
+
+            await sut.ReloadAsync();
+            // After reload of the SAME (still-broken) solution, diagnostics should be
+            // re-collected fresh — not stacked on top of the prior list.
+            sut.Diagnostics.Count.Should().Be(firstDiagCount,
+                "ReloadAsync should clear and re-collect diagnostics, not append");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }

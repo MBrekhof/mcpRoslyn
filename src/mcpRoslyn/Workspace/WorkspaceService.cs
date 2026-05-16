@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.Extensions.Logging;
+using mcpRoslyn.Contracts;
 using mcpRoslyn.Options;
 
 namespace mcpRoslyn.Workspace;
@@ -13,9 +14,16 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     private Solution? _solution;
     private readonly Dictionary<DocumentId, DateTime> _mtimeCache = new();
     private Task _warmupTask = Task.CompletedTask;
+    private readonly List<WorkspaceLoadDiagnostic> _diagnostics = new();
+    private readonly object _diagnosticsLock = new();
 
     public int LoadedProjectCount => _solution?.Projects.Count() ?? 0;
     public Task WarmupTask => _warmupTask;
+
+    public IReadOnlyList<WorkspaceLoadDiagnostic> Diagnostics
+    {
+        get { lock (_diagnosticsLock) return _diagnostics.ToArray(); }
+    }
 
     public async Task LoadAsync(CancellationToken ct = default)
     {
@@ -64,10 +72,16 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
 
     private async Task LoadUnsafeAsync(CancellationToken ct)
     {
+        lock (_diagnosticsLock) _diagnostics.Clear();
+
         var sw = System.Diagnostics.Stopwatch.StartNew();
         _workspace = MSBuildWorkspace.Create();
         _workspace.WorkspaceFailed += (_, e) =>
+        {
+            var diag = new WorkspaceLoadDiagnostic(e.Diagnostic.Kind.ToString(), e.Diagnostic.Message);
+            lock (_diagnosticsLock) _diagnostics.Add(diag);
             log.LogWarning("MSBuild workspace event: {Kind} {Message}", e.Diagnostic.Kind, e.Diagnostic.Message);
+        };
 
         _solution = await _workspace.OpenSolutionAsync(options.SolutionPath, cancellationToken: ct);
         log.LogInformation("Loaded {ProjectCount} projects in {Elapsed} ms from {Path}",

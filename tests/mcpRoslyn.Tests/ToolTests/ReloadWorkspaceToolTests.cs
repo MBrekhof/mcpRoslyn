@@ -19,5 +19,8 @@ public class ReloadWorkspaceToolTests
         result.Result!.Loaded.Should().BeTrue();
         result.Result.ProjectCount.Should().Be(2);
         result.Result.DurationMs.Should().BeGreaterThan(0);
+        result.Result.Diagnostics.Should().NotBeNull();
+        result.Result.Diagnostics.Should().BeEmpty(
+            "clean fixture solution should reload without MSBuild diagnostics");
     }
 }
