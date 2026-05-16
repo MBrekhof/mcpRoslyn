@@ -79,4 +79,21 @@ public class WorkspaceServiceTests
             compilation.Should().NotBeNull();
         }
     }
+
+    [Test]
+    public async Task LoadAsync_returns_before_warmup_completes()
+    {
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+
+        await sut.LoadAsync();
+
+        // WarmupTask must be a fresh Task (not the Task.CompletedTask sentinel),
+        // proving warm-up was kicked off rather than awaited inline.
+        sut.WarmupTask.Should().NotBeSameAs(Task.CompletedTask);
+
+        // And it must complete cleanly when given the chance.
+        await sut.WarmupTask;
+        sut.WarmupTask.IsCompletedSuccessfully.Should().BeTrue();
+    }
 }
