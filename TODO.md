@@ -1,16 +1,15 @@
 # TODO — mcpRoslyn
 
-v1 is shipped and accepted (see `docs/acceptance/2026-05-15-v1-acceptance.md`). Open items below.
+v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md)). v1.1 warm-up shipped (see [`docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`](docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md)).
 
 ## v1.1 follow-ups (from acceptance log)
 
-- [ ] **Expose MSBuild workspace warnings.** `WorkspaceFailed` events currently go through `ILogger.LogWarning`, but a NullLogger in unit-test paths hides them. Add either a `--verbose` flag or a `list_workspace_diagnostics` tool so callers can see which projects failed to load and why. Driven by the `duetGPT.LicenseServer` silent-drop observation (4/5 projects loaded with no surfaced reason).
-- [x] ~~**Warm-up / pre-compilation on load.**~~ Shipped — see [`docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`](docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md). First-query `find_references` on duetGPT dropped from 8 400 ms to 1 874 ms (4.5×).
-- [ ] **`semantic_search` attribute walk is O(symbols).** `has-attribute:` took ~11s on duetGPT because it walks every symbol in every compilation. Pre-build an attribute index (keyed by attribute full name) at load time to reduce to sub-second.
-- [ ] **`workspace_symbol` lookup hint when `find_callers` gets `SYMBOL_NOT_FOUND`.** `DocumentationCommentId`s are brittle across signature changes. When a `symbolId`-based call fails, surface a hint suggesting `workspace_symbol` to re-resolve the current ID.
-- [ ] **Project-count mismatch diagnostic.** When MSBuildWorkspace silently skips a project (SDK/target mismatch, missing restore), emit a clear error rather than a count discrepancy the user has to notice.
-
-- [ ] **`--log-file <path>` flag.** Tee `ILogger` output to a file so warm-up timings, MSBuild warnings, and per-call diagnostics are inspectable after the session. Claude Code's `--debug mcp` only captures stderr until the MCP `initialize` handler completes — anything async (like warm-up's per-project log lines) is lost. Small change in `Program.cs` and `McpRoslynOptions`.
+- [x] ~~**Expose MSBuild workspace warnings.**~~ Shipped (commit `417e86b`). `WorkspaceFailed` events now accumulate on `IWorkspaceService.Diagnostics` (cleared per load/reload) and are surfaced on `reload_workspace` output as `WorkspaceLoadDiagnostic[]`.
+- [x] ~~**Warm-up / pre-compilation on load.**~~ Shipped. First-query `find_references` on duetGPT dropped from 8 400 ms to 1 874 ms (4.5×).
+- [ ] **`semantic_search` attribute walk is O(symbols).** `has-attribute:` took ~11 s on duetGPT (still ~7.7 s in v1.1) because it walks every symbol in every compilation. Pre-build an attribute index (keyed by attribute full name) at load time to reduce to sub-second. Design call deferred — eager vs lazy index, when to invalidate (reload only? or on first `WithDocumentText`?), memory cost on 1000+ project solutions.
+- [x] ~~**`workspace_symbol` lookup hint when `find_callers` gets `SYMBOL_NOT_FOUND`.**~~ Shipped (commit `f938fb0`). Both the symbolId and cursor-position failure paths now carry contextual `hint` fields.
+- [x] ~~**Project-count mismatch diagnostic.**~~ Shipped as part of the diagnostics-surface work (`417e86b`). The "X of 5 loaded, here's the failure list" answer is now derivable from `reload_workspace`'s output. Did not implement an explicit declared-vs-loaded numeric comparison — would require parsing `.sln`/`.slnx` formats; the diagnostics list carries the same information without that risk.
+- [x] ~~**`--log-file <path>` flag.**~~ Shipped (commit `421cc8f`). Append-mode file logging via a custom `ILoggerProvider`; closes the "Claude Code only captures stderr until `initialize`" diagnostic gap.
 
 ## Deferred from v1 design
 
@@ -20,6 +19,12 @@ v1 is shipped and accepted (see `docs/acceptance/2026-05-15-v1-acceptance.md`). 
 - [ ] **Wider `semantic_search` grammar.** Current 5 patterns (`derives-from:`, `implements:`, `has-attribute:`, `returns:`, `parameter-type:`) are a starting set. Add based on observed gaps in real sessions.
 - [ ] **`ISymbolProvider` abstraction.** If we ever wrap gopls/pyright/rust-analyzer, factor `WorkspaceService` behind a more abstract provider interface. Don't build it speculatively.
 
+## Nice-to-haves spotted along the way
+
+- [ ] **Extract project name from `WorkspaceLoadDiagnostic.Message`.** Currently the DTO is `{ Kind, Message }`; the project filename is embedded in the message text. Adding a `ProjectName: string?` field (regex-extracted from the message) would make filtering/grouping easier for tool callers. Small, safe.
+- [ ] **Fix the `Workspace.WorkspaceFailed` obsolete warning.** Roslyn 5.3 deprecates the event in favor of `RegisterWorkspaceFailedHandler`. CS0618 has been accepted since v1; a small migration would clean it up.
+- [ ] **Re-measure `find_implementations` on duetGPT.** v1.1 acceptance showed an apparent regression (300 ms → 832 ms) on a single sample. One more run will tell if it's noise or real.
+
 ## Real-session validation (still to do)
 
-- [ ] Use mcpRoslyn in one feature-sized duetGPT task and record: missing tools, wrong response shapes, cold-start friction. Feed into v1.1 prioritization. The acceptance log covers correctness of 4 queries; it does not cover end-to-end usefulness in an agent loop.
+- [ ] Use mcpRoslyn in one feature-sized duetGPT task and record: missing tools, wrong response shapes, cold-start friction. The acceptance logs cover correctness of canned queries; they do not cover end-to-end usefulness in an agent loop.
