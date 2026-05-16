@@ -16,6 +16,11 @@ internal static class TestHost
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
         var workspace = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
         await workspace.LoadAsync();
+        // Wait for warm-up (incl. SymbolIndex build) so tools that depend on
+        // the index have something to query. Without this, semantic_search
+        // patterns backed by the index race the background build and return
+        // empty buckets non-deterministically.
+        await workspace.WarmupTask;
 
         var services = new ServiceCollection();
         services.AddSingleton(options);

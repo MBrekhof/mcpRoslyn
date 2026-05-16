@@ -31,8 +31,6 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
             var kind = pattern[..colonIdx];
             var target = pattern[(colonIdx + 1)..];
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
-            var matches = new List<Contracts.SymbolInfo>();
-            var dedup = new HashSet<string>();
 
             switch (kind)
             {
@@ -43,8 +41,10 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
                         return Contracts.ToolResult<SemanticSearchResult>.Fail(
                             "SYMBOL_NOT_FOUND", $"Target type not found: {target}");
                     var derived = await SymbolFinder.FindDerivedClassesAsync(named, solution, transitive: true, projects: null, ct2);
+                    var matches = new List<Contracts.SymbolInfo>();
+                    var dedup = new HashSet<string>();
                     foreach (var d in derived) AddIfNew(matches, dedup, d);
-                    break;
+                    return Contracts.ToolResult<SemanticSearchResult>.Ok(new SemanticSearchResult(matches));
                 }
                 case "implements":
                 {
@@ -53,61 +53,24 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
                         return Contracts.ToolResult<SemanticSearchResult>.Fail(
                             "SYMBOL_NOT_FOUND", $"Target type not found: {target}");
                     var impls = await SymbolFinder.FindImplementationsAsync(named, solution, transitive: true, projects: null, ct2);
+                    var matches = new List<Contracts.SymbolInfo>();
+                    var dedup = new HashSet<string>();
                     foreach (var i in impls) AddIfNew(matches, dedup, i);
-                    break;
+                    return Contracts.ToolResult<SemanticSearchResult>.Ok(new SemanticSearchResult(matches));
                 }
                 case "has-attribute":
-                {
-                    foreach (var project in solution.Projects)
-                    {
-                        var compilation = await project.GetCompilationAsync(ct2);
-                        if (compilation is null) continue;
-
-                        foreach (var sym in WalkAllSymbols(compilation))
-                        {
-                            if (sym.GetAttributes().Any(a => MatchesTypeName(a.AttributeClass, target)))
-                                AddIfNew(matches, dedup, sym);
-                        }
-                    }
-                    break;
-                }
+                    return Contracts.ToolResult<SemanticSearchResult>.Ok(
+                        new SemanticSearchResult(Workspace.SymbolIndex.QueryAttribute(target, solution, ct2)));
                 case "returns":
-                {
-                    foreach (var project in solution.Projects)
-                    {
-                        var compilation = await project.GetCompilationAsync(ct2);
-                        if (compilation is null) continue;
-
-                        foreach (var sym in WalkAllSymbols(compilation))
-                        {
-                            if (sym is IMethodSymbol m && MatchesTypeName(m.ReturnType, target))
-                                AddIfNew(matches, dedup, m);
-                        }
-                    }
-                    break;
-                }
+                    return Contracts.ToolResult<SemanticSearchResult>.Ok(
+                        new SemanticSearchResult(Workspace.SymbolIndex.QueryReturnType(target, solution, ct2)));
                 case "parameter-type":
-                {
-                    foreach (var project in solution.Projects)
-                    {
-                        var compilation = await project.GetCompilationAsync(ct2);
-                        if (compilation is null) continue;
-
-                        foreach (var sym in WalkAllSymbols(compilation))
-                        {
-                            if (sym is IMethodSymbol m &&
-                                m.Parameters.Any(p => MatchesTypeName(p.Type, target)))
-                                AddIfNew(matches, dedup, m);
-                        }
-                    }
-                    break;
-                }
+                    return Contracts.ToolResult<SemanticSearchResult>.Ok(
+                        new SemanticSearchResult(Workspace.SymbolIndex.QueryParameterType(target, solution, ct2)));
                 default:
                     return Contracts.ToolResult<SemanticSearchResult>.Fail(
                         "INVALID_PATTERN", $"Unknown pattern kind: {kind}");
             }
-
-            return Contracts.ToolResult<SemanticSearchResult>.Ok(new SemanticSearchResult(matches));
         }, ct);
 
     private static void AddIfNew(List<Contracts.SymbolInfo> matches, HashSet<string> dedup, ISymbol sym)
@@ -128,49 +91,5 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
             if (sym is not null) return sym;
         }
         return null;
-    }
-
-    private static bool MatchesTypeName(ITypeSymbol? type, string target)
-    {
-        if (type is null) return false;
-        // Try display string first — this handles primitive aliases like "int", "string"
-        var displayName = type.ToDisplayString();
-        if (displayName == target) return true;
-        // Also try fully-qualified metadata name (e.g. "TestLib.MyMarkerAttribute")
-        var metadataName = $"{type.ContainingNamespace?.ToDisplayString()}.{type.MetadataName}".TrimStart('.');
-        return metadataName == target;
-    }
-
-    private static IEnumerable<ISymbol> WalkAllSymbols(Compilation compilation)
-    {
-        foreach (var sym in WalkNamespace(compilation.GlobalNamespace)) yield return sym;
-
-        static IEnumerable<ISymbol> WalkNamespace(INamespaceSymbol ns)
-        {
-            foreach (var member in ns.GetMembers())
-            {
-                if (member is INamespaceSymbol child)
-                {
-                    foreach (var nested in WalkNamespace(child)) yield return nested;
-                }
-                else if (member is INamedTypeSymbol type)
-                {
-                    yield return type;
-                    foreach (var nested in WalkType(type)) yield return nested;
-                }
-            }
-        }
-
-        static IEnumerable<ISymbol> WalkType(INamedTypeSymbol type)
-        {
-            foreach (var member in type.GetMembers())
-            {
-                yield return member;
-                if (member is INamedTypeSymbol nestedType)
-                {
-                    foreach (var nested in WalkType(nestedType)) yield return nested;
-                }
-            }
-        }
     }
 }
