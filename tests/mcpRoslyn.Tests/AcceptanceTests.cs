@@ -53,6 +53,21 @@ public class AcceptanceTests
         var loadedProjects = workspace.LoadedProjectCount;
         TestContext.WriteLine($"Cold start: {coldStartSw.ElapsedMilliseconds} ms, {loadedProjects} projects loaded.");
 
+        // v1.1+: wait for background warm-up (per-project compilation) AND
+        // v1.2: SymbolIndex build. Queries below that hit the index would otherwise
+        // race the background build and return empty buckets.
+        var warmupSw = Stopwatch.StartNew();
+        await workspace.WarmupTask;
+        warmupSw.Stop();
+        TestContext.WriteLine($"Warm-up + index build (background, awaited): {warmupSw.ElapsedMilliseconds} ms");
+
+        if (workspace.Diagnostics.Count > 0)
+        {
+            TestContext.WriteLine($"MSBuild diagnostics: {workspace.Diagnostics.Count}");
+            foreach (var d in workspace.Diagnostics.Take(10))
+                TestContext.WriteLine($"  [{d.Kind}] {d.Message}");
+        }
+
         // 1) find_references on IGroupPermissionResolver
         var findRefs = await CreateAsync<FindReferencesTool>(workspace);
         var refsSw = Stopwatch.StartNew();

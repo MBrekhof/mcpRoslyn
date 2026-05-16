@@ -82,16 +82,17 @@ Produces `mcpRoslyn.exe` as a single-file self-contained win-x64 binary at the p
 
 ## Performance
 
-On `duetGPT.sln` (4 loaded projects, 598 .cs files), measured cold-start and first-query times:
+On `duetGPT.sln` (4 loaded projects, 598 .cs files), measured cold-start and query times:
 
-| Metric | v1 | v1.1 |
-|---|---|---|
-| Solution load | ~8.5 s | ~2 s (cache-warmed env) |
-| First `find_references` | ~8.4 s | ~1.9 s (4.5× faster — warm-up) |
-| Subsequent queries | 14 ms – 300 ms | similar |
-| `semantic_search has-attribute:` | ~11 s | ~7.7 s (still slow — see [`TODO.md`](TODO.md)) |
+| Metric | v1 | v1.1 | v1.2 |
+|---|---|---|---|
+| Solution load (`LoadAsync` return) | ~8.5 s | ~2 s | ~2–11 s (env variance; same code path) |
+| Warm-up + index build (background) | n/a | ~8 s | ~23 s |
+| First `find_references` | ~8.4 s | ~1.9 s | **~640 ms** |
+| `find_implementations` | ~300 ms | ~830 ms | ~320 ms |
+| `semantic_search has-attribute:` | ~11 s | ~7.7 s | **~11 ms** (1000× faster) |
 
-Full detail in [`docs/acceptance/`](docs/acceptance/).
+All warm-up cost stays in the background — `LoadAsync` returns at the same time. Full detail in [`docs/acceptance/`](docs/acceptance/).
 
 ## License
 
