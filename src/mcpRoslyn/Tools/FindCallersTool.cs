@@ -28,6 +28,13 @@ internal sealed class FindCallersTool(IWorkspaceService ws, ILogger<FindCallersT
             if (!string.IsNullOrWhiteSpace(symbolId))
             {
                 symbol = await RoslynHelpers.ResolveSymbolByIdAsync(solution, symbolId, ct2);
+                if (symbol is null)
+                    return Contracts.ToolResult<FindCallersResult>.Fail(
+                        "SYMBOL_NOT_FOUND",
+                        $"Symbol ID '{symbolId}' did not resolve in any loaded project.",
+                        hint: "DocumentationCommentIds are brittle across signature changes. " +
+                              "Call workspace_symbol with the method name to discover the current symbolId, " +
+                              "then re-issue find_callers with the fresh value.");
             }
             else if (filePath is not null && line is int l && column is int c)
             {
@@ -36,16 +43,18 @@ internal sealed class FindCallersTool(IWorkspaceService ws, ILogger<FindCallersT
                     return Contracts.ToolResult<FindCallersResult>.Fail(
                         "FILE_NOT_IN_WORKSPACE", $"File not in workspace: {filePath}");
                 symbol = await RoslynHelpers.ResolveSymbolAtPositionAsync(doc, l, c, ct2);
+                if (symbol is null)
+                    return Contracts.ToolResult<FindCallersResult>.Fail(
+                        "SYMBOL_NOT_FOUND",
+                        $"No symbol at {filePath}:{l}:{c}.",
+                        hint: "Verify the line/column points at an identifier, " +
+                              "or use workspace_symbol to locate the method by name.");
             }
             else
             {
                 return Contracts.ToolResult<FindCallersResult>.Fail(
                     "POSITION_INVALID", "Must provide either symbolId OR (filePath, line, column).");
             }
-
-            if (symbol is null)
-                return Contracts.ToolResult<FindCallersResult>.Fail(
-                    "SYMBOL_NOT_FOUND", "Could not resolve symbol.");
 
             var entries = new List<CallerEntry>();
             var seen = new HashSet<string>();
