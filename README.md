@@ -64,6 +64,14 @@ Useful when a project contains multiple `.sln` files and you want to force a spe
 }
 ```
 
+### CLI arguments
+
+| Flag | Required | Description |
+|---|---|---|
+| `--solution <path>` | No | Path to a `.sln` or `.slnx`. When omitted, mcpRoslyn walks up from CWD looking for one. |
+| `--log-level <level>` | No | `Debug`, `Information` (default), `Warning`, `Error`. |
+| `--log-file <path>` | No | Tee `ILogger` output to a file (append mode). Useful because Claude Code only surfaces MCP stderr during the `initialize` handler — anything after that (warm-up timings, per-tool diagnostics) is otherwise lost. |
+
 ## Building
 
 ```powershell

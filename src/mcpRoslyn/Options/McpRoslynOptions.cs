@@ -6,4 +6,5 @@ public sealed class McpRoslynOptions
 {
     public required string SolutionPath { get; init; }
     public LogLevel LogLevel { get; init; } = LogLevel.Information;
+    public string? LogFile { get; init; }
 }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
+using mcpRoslyn.Logging;
 using mcpRoslyn.Options;
 using mcpRoslyn.Workspace;
 
@@ -16,6 +17,9 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 builder.Logging.SetMinimumLevel(options.LogLevel);
+
+if (!string.IsNullOrWhiteSpace(options.LogFile))
+    builder.Logging.AddProvider(new FileLoggerProvider(options.LogFile));
 
 builder.Services.AddSingleton(options);
 
@@ -32,6 +36,7 @@ await builder.Build().RunAsync();
 static McpRoslynOptions ParseArgs(string[] args)
 {
     string? solution = null;
+    string? logFile = null;
     var logLevel = LogLevel.Information;
 
     for (int i = 0; i < args.Length; i++)
@@ -45,6 +50,9 @@ static McpRoslynOptions ParseArgs(string[] args)
                 if (Enum.TryParse<LogLevel>(args[++i], true, out var level))
                     logLevel = level;
                 break;
+            case "--log-file" when i + 1 < args.Length:
+                logFile = args[++i];
+                break;
         }
     }
 
@@ -53,7 +61,7 @@ static McpRoslynOptions ParseArgs(string[] args)
     else if (!File.Exists(solution))
         throw new FileNotFoundException($"Solution file not found: {solution}");
 
-    return new McpRoslynOptions { SolutionPath = solution, LogLevel = logLevel };
+    return new McpRoslynOptions { SolutionPath = solution, LogLevel = logLevel, LogFile = logFile };
 }
 
 static string DiscoverSolution()
