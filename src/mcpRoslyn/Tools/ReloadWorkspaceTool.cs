@@ -18,16 +18,20 @@ internal sealed class ReloadWorkspaceTool(IWorkspaceService ws, ILogger<ReloadWo
 {
     [McpServerTool(Name = "reload_workspace")]
     [Description("Re-runs MSBuild evaluation on the solution. Call after .csproj/.sln changes. Returned diagnostics list contains any projects that failed to load.")]
-    public Task<ToolResult<ReloadResult>> InvokeAsync(CancellationToken ct)
+    public Task<ToolResult<ReloadResult>> InvokeAsync(
+        string format = "structured",
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             await Workspace.ReloadAsync(ct2);
-            return ToolResult<ReloadResult>.Ok(
-                new ReloadResult(
-                    Loaded: true,
-                    ProjectCount: Workspace.LoadedProjectCount,
-                    DurationMs: sw.ElapsedMilliseconds,
-                    Diagnostics: Workspace.Diagnostics));
+            var result = new ReloadResult(
+                Loaded: true,
+                ProjectCount: Workspace.LoadedProjectCount,
+                DurationMs: sw.ElapsedMilliseconds,
+                Diagnostics: Workspace.Diagnostics);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return ToolResult<ReloadResult>.OkSummary($"reloaded {result.ProjectCount} projects");
+            return ToolResult<ReloadResult>.Ok(result);
         }, ct);
 }

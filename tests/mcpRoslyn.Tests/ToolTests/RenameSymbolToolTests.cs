@@ -24,7 +24,7 @@ public class RenameSymbolToolTests
             englishGreeterPath, line: 5, column: 19,
             newName: "Salute",
             applyEdits: false,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();
@@ -51,7 +51,7 @@ public class RenameSymbolToolTests
                 dutchPath, line: 3, column: 14,
                 newName: "NederlandseGreeter",
                 applyEdits: true,
-                CancellationToken.None);
+                ct: CancellationToken.None);
 
             result.Error.Should().BeNull();
             result.Result.Should().NotBeNull();

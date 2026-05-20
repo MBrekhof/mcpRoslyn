@@ -17,7 +17,7 @@ public class FindImplementationsToolTests
             "Fixtures", "TestSolution", "TestLib", "IGreeter.cs");
 
         // line 3 col 18 lands on IGreeter identifier — same position as find_references test
-        var result = await host.Tool.InvokeAsync(iGreeterPath, line: 3, column: 18, symbolId: null, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(iGreeterPath, line: 3, column: 18, symbolId: null, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

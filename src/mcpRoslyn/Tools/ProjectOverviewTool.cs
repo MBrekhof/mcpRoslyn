@@ -29,6 +29,7 @@ internal sealed class ProjectOverviewTool(IWorkspaceService ws, ILogger<ProjectO
         int maxProjects = 25,
         int maxPackagesPerProject = 8,
         int maxProjectReferencesPerProject = 8,
+        string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
@@ -46,10 +47,13 @@ internal sealed class ProjectOverviewTool(IWorkspaceService ws, ILogger<ProjectO
                 PackageReferences: ReadPackageRefsFromCsproj(p.FilePath, maxPackagesPerProject, log)
             )).ToArray();
 
-            return Contracts.ToolResult<ProjectOverviewResult>.Ok(new ProjectOverviewResult(
+            var result = new ProjectOverviewResult(
                 SolutionPath: solution.FilePath ?? "",
                 Projects: projects,
-                Diagnostics: Workspace.Diagnostics));
+                Diagnostics: Workspace.Diagnostics);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<ProjectOverviewResult>.OkSummary($"{result.Projects.Count} projects");
+            return Contracts.ToolResult<ProjectOverviewResult>.Ok(result);
         }, ct);
 
     /// <summary>

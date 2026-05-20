@@ -73,7 +73,7 @@ public class AcceptanceTests
         var refsSw = Stopwatch.StartNew();
         var refsResult = await findRefs.InvokeAsync(filePath: null, line: null, column: null,
             symbolId: "T:duetGPT.Services.IGroupPermissionResolver",
-            CancellationToken.None);
+            ct: CancellationToken.None);
         refsSw.Stop();
         TestContext.WriteLine($"find_references(IGroupPermissionResolver): {refsSw.ElapsedMilliseconds} ms, " +
             $"error={refsResult.Error?.Code ?? "null"}, count={refsResult.Result?.References.Count ?? 0}");
@@ -83,7 +83,7 @@ public class AcceptanceTests
         var implsSw = Stopwatch.StartNew();
         var implsResult = await findImpls.InvokeAsync(filePath: null, line: null, column: null,
             symbolId: "T:duetGPT.Services.IBuiltInToolProvider",
-            CancellationToken.None);
+            ct: CancellationToken.None);
         implsSw.Stop();
         TestContext.WriteLine($"find_implementations(IBuiltInToolProvider): {implsSw.ElapsedMilliseconds} ms, " +
             $"error={implsResult.Error?.Code ?? "null"}, count={implsResult.Result?.Implementations.Count ?? 0}");
@@ -94,7 +94,7 @@ public class AcceptanceTests
         var callersResult = await findCallers.InvokeAsync(filePath: null, line: null, column: null,
             symbolId: "M:duetGPT.Services.KnowledgeService.ExpandQueryAsync(System.String,System.Threading.CancellationToken)",
             transitive: false,
-            CancellationToken.None);
+            ct: CancellationToken.None);
         callersSw.Stop();
         TestContext.WriteLine($"find_callers(KnowledgeService.ExpandQueryAsync): {callersSw.ElapsedMilliseconds} ms, " +
             $"error={callersResult.Error?.Code ?? "null"}, count={callersResult.Result?.Callers.Count ?? 0}");
@@ -104,7 +104,7 @@ public class AcceptanceTests
         var searchSw = Stopwatch.StartNew();
         var searchResult = await search.InvokeAsync(
             "has-attribute:ModelContextProtocol.Server.McpServerToolTypeAttribute",
-            CancellationToken.None);
+            ct: CancellationToken.None);
         searchSw.Stop();
         TestContext.WriteLine($"semantic_search(has-attribute:McpServerToolType): {searchSw.ElapsedMilliseconds} ms, " +
             $"error={searchResult.Error?.Code ?? "null"}, count={searchResult.Result?.Matches.Count ?? 0}");

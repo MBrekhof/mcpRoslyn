@@ -16,7 +16,8 @@ internal sealed class GotoDefinitionTool(IWorkspaceService ws, ILogger<GotoDefin
     [Description("Returns all source-declaration locations for the symbol at the given cursor position. Multiple locations possible for partial classes.")]
     public Task<Contracts.ToolResult<GotoDefinitionResult>> InvokeAsync(
         string filePath, int line, int column,
-        CancellationToken ct)
+        string format = "structured",
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
@@ -37,6 +38,14 @@ internal sealed class GotoDefinitionTool(IWorkspaceService ws, ILogger<GotoDefin
                 .Cast<Contracts.SymbolLocation>()
                 .ToList();
 
-            return Contracts.ToolResult<GotoDefinitionResult>.Ok(new GotoDefinitionResult(locations));
+            var result = new GotoDefinitionResult(locations);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+            {
+                var summaryText = result.Definitions.Count > 0
+                    ? $"definition at {result.Definitions[0].FilePath}:{result.Definitions[0].Line}"
+                    : "no definition found";
+                return Contracts.ToolResult<GotoDefinitionResult>.OkSummary(summaryText);
+            }
+            return Contracts.ToolResult<GotoDefinitionResult>.Ok(result);
         }, ct);
 }

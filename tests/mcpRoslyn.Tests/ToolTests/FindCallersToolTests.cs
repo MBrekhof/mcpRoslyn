@@ -18,7 +18,7 @@ public class FindCallersToolTests
 
         // IGreeter.cs line 5: `    string Greet(string name);`
         // 'G' of Greet after 4 spaces + "string " (7 chars) = column 12 (1-based)
-        var result = await host.Tool.InvokeAsync(iGreeterPath, line: 5, column: 12, symbolId: null, transitive: false, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(iGreeterPath, line: 5, column: 12, symbolId: null, transitive: false, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();
@@ -34,7 +34,7 @@ public class FindCallersToolTests
         var result = await host2.Tool.InvokeAsync(
             filePath: null, line: null, column: null,
             symbolId: "M:Bogus.Namespace.MissingMethod(System.String)",
-            transitive: false, CancellationToken.None);
+            transitive: false, ct: CancellationToken.None);
 
         result.Error.Should().NotBeNull();
         result.Error!.Code.Should().Be("SYMBOL_NOT_FOUND");

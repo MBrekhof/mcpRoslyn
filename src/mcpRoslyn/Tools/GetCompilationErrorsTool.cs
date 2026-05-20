@@ -16,7 +16,8 @@ internal sealed class GetCompilationErrorsTool(IWorkspaceService ws, ILogger<Get
     [Description("Solution-wide diagnostic list — equivalent to 'would dotnet build succeed?' without invoking MSBuild. Optional severity filter and projectName filter.")]
     public Task<Contracts.ToolResult<GetCompilationErrorsResult>> InvokeAsync(
         string? severity, string? projectName,
-        CancellationToken ct)
+        string format = "structured",
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
@@ -43,7 +44,14 @@ internal sealed class GetCompilationErrorsTool(IWorkspaceService ws, ILogger<Get
                 }
             }
 
-            return Contracts.ToolResult<GetCompilationErrorsResult>.Ok(new GetCompilationErrorsResult(results));
+            var result = new GetCompilationErrorsResult(results);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+            {
+                var errCount = result.Diagnostics.Count(d => string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase));
+                var warnCount = result.Diagnostics.Count(d => string.Equals(d.Severity, "Warning", StringComparison.OrdinalIgnoreCase));
+                return Contracts.ToolResult<GetCompilationErrorsResult>.OkSummary($"{errCount} errors, {warnCount} warnings");
+            }
+            return Contracts.ToolResult<GetCompilationErrorsResult>.Ok(result);
         }, ct);
 
     private static DiagnosticSeverity? ParseSeverity(string? s)

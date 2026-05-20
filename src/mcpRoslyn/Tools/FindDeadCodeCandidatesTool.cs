@@ -48,6 +48,7 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
         bool includeTests = false,
         int maxResults = 20,
         string[]? excludePaths = null,
+        string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
@@ -102,10 +103,18 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
                     Reason: confidence == "high" ? "no-references" : "no-references-but-internals-visible-to-friends"));
             }
 
-            return Contracts.ToolResult<FindDeadCodeResult>.Ok(new FindDeadCodeResult(
+            var result = new FindDeadCodeResult(
                 Candidates: candidates,
                 ProjectsScanned: solution.Projects.Select(p => p.Name).ToArray(),
-                Skipped: new DeadCodeSkipped(publicSkip, testSkip, denySkip)));
+                Skipped: new DeadCodeSkipped(publicSkip, testSkip, denySkip));
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+            {
+                var highCount = result.Candidates.Count(c => string.Equals(c.Confidence, "high", StringComparison.OrdinalIgnoreCase));
+                var medCount = result.Candidates.Count(c => string.Equals(c.Confidence, "medium", StringComparison.OrdinalIgnoreCase));
+                return Contracts.ToolResult<FindDeadCodeResult>.OkSummary(
+                    $"{result.Candidates.Count} candidates ({highCount} high, {medCount} medium)");
+            }
+            return Contracts.ToolResult<FindDeadCodeResult>.Ok(result);
         }, ct);
 
     private static bool IsDenylisted(ISymbol symbol)

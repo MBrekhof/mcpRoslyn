@@ -30,6 +30,7 @@ internal sealed class FindRegistrationsTool(IWorkspaceService ws, ILogger<FindRe
         string? query = null,
         bool includeConsumers = true,
         int maxResults = 20,
+        string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
@@ -65,8 +66,19 @@ internal sealed class FindRegistrationsTool(IWorkspaceService ws, ILogger<FindRe
                 Location:    e.Location,
                 LikelyConsumers: Array.Empty<DiConsumer>())).ToArray();
 
-            return Contracts.ToolResult<FindRegistrationsResult>.Ok(
-                new FindRegistrationsResult(regs, unc, truncated));
+            var result = new FindRegistrationsResult(regs, unc, truncated);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+            {
+                var lifetimes = result.Registrations
+                    .Where(r => r.Lifetime is not null)
+                    .GroupBy(r => r.Lifetime!)
+                    .Select(g => $"{g.Count()} {g.Key}")
+                    .ToList();
+                var lifetimeBreakdown = lifetimes.Count > 0 ? string.Join(", ", lifetimes) : "none";
+                return Contracts.ToolResult<FindRegistrationsResult>.OkSummary(
+                    $"{result.Registrations.Count} DI registrations ({lifetimeBreakdown})");
+            }
+            return Contracts.ToolResult<FindRegistrationsResult>.Ok(result);
         }, ct);
 
     private IEnumerable<DiConsumer> FindConsumers(string serviceType, Microsoft.CodeAnalysis.Solution solution)

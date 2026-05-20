@@ -18,6 +18,7 @@ internal sealed class FindDerivedTypesTool(IWorkspaceService ws, ILogger<FindDer
     public Task<Contracts.ToolResult<FindDerivedTypesResult>> InvokeAsync(
         string? filePath, int? line, int? column, string? symbolId,
         bool transitive = false,
+        string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
@@ -51,6 +52,9 @@ internal sealed class FindDerivedTypesTool(IWorkspaceService ws, ILogger<FindDer
                 : await SymbolFinder.FindDerivedClassesAsync(named, solution, transitive, projects: null, ct2);
 
             var results = derived.Select(RoslynHelpers.ToSymbolInfo).ToList();
-            return Contracts.ToolResult<FindDerivedTypesResult>.Ok(new FindDerivedTypesResult(results));
+            var result = new FindDerivedTypesResult(results);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<FindDerivedTypesResult>.OkSummary($"{result.DerivedTypes.Count} derived types");
+            return Contracts.ToolResult<FindDerivedTypesResult>.Ok(result);
         }, ct);
 }

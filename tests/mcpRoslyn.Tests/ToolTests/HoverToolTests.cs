@@ -18,7 +18,7 @@ public class HoverToolTests
 
         // Line 5: `    public string Greet(string name) => $"Hello, {name}!";`
         // The 'G' of Greet is at column 19 (1-based, after 4 spaces + "public string ").
-        var result = await host.Tool.InvokeAsync(englishGreeterPath, line: 5, column: 19, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(englishGreeterPath, line: 5, column: 19, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

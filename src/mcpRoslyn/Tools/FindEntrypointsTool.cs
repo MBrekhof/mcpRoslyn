@@ -27,6 +27,7 @@ internal sealed class FindEntrypointsTool(IWorkspaceService ws, ILogger<FindEntr
         bool includeHostedServices = true,
         bool includeMiddlewarePipeline = true,
         int maxResultsPerSection = 20,
+        string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
@@ -77,7 +78,10 @@ internal sealed class FindEntrypointsTool(IWorkspaceService ws, ILogger<FindEntr
             }
             else hosted = Array.Empty<EntrypointHostedService>();
 
-            return Contracts.ToolResult<FindEntrypointsResult>.Ok(new FindEntrypointsResult(
-                routes, middleware, hosted, truncated));
+            var result = new FindEntrypointsResult(routes, middleware, hosted, truncated);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<FindEntrypointsResult>.OkSummary(
+                    $"{result.Routes.Count} routes, {result.Middleware.Count} middleware, {result.HostedServices.Count} hosted services");
+            return Contracts.ToolResult<FindEntrypointsResult>.Ok(result);
         }, ct);
 }

@@ -16,7 +16,7 @@ public class GetDocumentDiagnosticsToolTests
             AppContext.BaseDirectory,
             "Fixtures", "TestSolution", "TestApp", "BrokenClass.cs");
 
-        var result = await host.Tool.InvokeAsync(brokenPath, severity: null, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(brokenPath, severity: null, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

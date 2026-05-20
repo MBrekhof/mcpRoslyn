@@ -13,7 +13,7 @@ public class WorkspaceSymbolToolTests
     {
         await using var host = await TestHost.CreateAsync<WorkspaceSymbolTool>();
 
-        var result = await host.Tool.InvokeAsync("Greeter", null, null, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync("Greeter", null, null, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();
@@ -28,7 +28,7 @@ public class WorkspaceSymbolToolTests
     {
         await using var host2 = await TestHost.CreateAsync<WorkspaceSymbolTool>();
 
-        var result = await host2.Tool.InvokeAsync("Greeter", new[] { "Interface" }, null, CancellationToken.None);
+        var result = await host2.Tool.InvokeAsync("Greeter", new[] { "Interface" }, null, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

@@ -35,6 +35,7 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
         bool includeDerivedTypes = true,
         bool includeCallers = true,
         int maxPerSection = 20,
+        string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
@@ -90,14 +91,19 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
 
             await Task.WhenAll(hoverTask, refsTask, implTask, derivTask, callTask);
 
-            return Contracts.ToolResult<AnalyzeSymbolResult>.Ok(new AnalyzeSymbolResult(
+            var result = new AnalyzeSymbolResult(
                 Symbol:          RoslynHelpers.ToSymbolInfo(symbol),
                 Hover:           await hoverTask,
                 References:      await refsTask,
                 Implementations: await implTask,
                 DerivedTypes:    await derivTask,
                 Callers:         await callTask,
-                Truncated:       truncated.OrderBy(s => s, StringComparer.Ordinal).ToArray()));
+                Truncated:       truncated.OrderBy(s => s, StringComparer.Ordinal).ToArray());
+
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<AnalyzeSymbolResult>.OkSummary(
+                    $"{result.Symbol.Name}: refs={result.References?.Count ?? 0} impls={result.Implementations?.Count ?? 0} derived={result.DerivedTypes?.Count ?? 0} callers={result.Callers?.Count ?? 0}");
+            return Contracts.ToolResult<AnalyzeSymbolResult>.Ok(result);
         }, ct);
 
     // ── per-section helpers ──────────────────────────────────────────────────

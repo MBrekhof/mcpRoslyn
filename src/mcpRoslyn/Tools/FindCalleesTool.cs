@@ -19,6 +19,7 @@ internal sealed class FindCalleesTool(IWorkspaceService ws, ILogger<FindCalleesT
     public Task<Contracts.ToolResult<FindCalleesResult>> InvokeAsync(
         string? filePath = null, int? line = null, int? column = null, string? symbolId = null,
         int maxResults = 50,
+        string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
@@ -88,6 +89,9 @@ internal sealed class FindCalleesTool(IWorkspaceService ws, ILogger<FindCalleesT
                 if (entries.Count >= maxResults) break;
             }
 
-            return Contracts.ToolResult<FindCalleesResult>.Ok(new FindCalleesResult(entries));
+            var result = new FindCalleesResult(entries);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<FindCalleesResult>.OkSummary($"{result.Callees.Count} callees");
+            return Contracts.ToolResult<FindCalleesResult>.Ok(result);
         }, ct);
 }

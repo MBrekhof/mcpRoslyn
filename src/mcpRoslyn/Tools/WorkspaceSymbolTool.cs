@@ -20,7 +20,8 @@ internal sealed class WorkspaceSymbolTool(IWorkspaceService ws, ILogger<Workspac
         string query,
         string[]? kinds,
         int? maxResults,
-        CancellationToken ct)
+        string format = "structured",
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
@@ -57,7 +58,10 @@ internal sealed class WorkspaceSymbolTool(IWorkspaceService ws, ILogger<Workspac
                 }
             }
 
-            return Contracts.ToolResult<WorkspaceSymbolResult>.Ok(new WorkspaceSymbolResult(results));
+            var result = new WorkspaceSymbolResult(results);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<WorkspaceSymbolResult>.OkSummary($"{result.Symbols.Count} matching symbols");
+            return Contracts.ToolResult<WorkspaceSymbolResult>.Ok(result);
         }, ct);
 
     private static string ClassifyKind(ISymbol symbol) => symbol switch

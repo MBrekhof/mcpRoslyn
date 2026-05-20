@@ -17,7 +17,8 @@ internal sealed class FindImplementationsTool(IWorkspaceService ws, ILogger<Find
     [Description("For an interface, interface member, or abstract member: returns all concrete implementations.")]
     public Task<Contracts.ToolResult<FindImplementationsResult>> InvokeAsync(
         string? filePath, int? line, int? column, string? symbolId,
-        CancellationToken ct)
+        string format = "structured",
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
@@ -58,6 +59,9 @@ internal sealed class FindImplementationsTool(IWorkspaceService ws, ILogger<Find
                 }
             }
 
-            return Contracts.ToolResult<FindImplementationsResult>.Ok(new FindImplementationsResult(locations));
+            var result = new FindImplementationsResult(locations);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<FindImplementationsResult>.OkSummary($"{result.Implementations.Count} implementations");
+            return Contracts.ToolResult<FindImplementationsResult>.Ok(result);
         }, ct);
 }

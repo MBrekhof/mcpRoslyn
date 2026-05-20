@@ -18,7 +18,7 @@ public class FindDerivedTypesToolTests
 
         // Line 3: `public abstract class Shape`
         // 'S' of Shape after "public abstract class " (22 chars) = column 23 (1-based)
-        var result = await host.Tool.InvokeAsync(shapePath, line: 3, column: 23, symbolId: null, transitive: false, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(shapePath, line: 3, column: 23, symbolId: null, transitive: false, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

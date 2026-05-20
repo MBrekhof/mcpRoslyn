@@ -16,7 +16,8 @@ internal sealed class GetDocumentDiagnosticsTool(IWorkspaceService ws, ILogger<G
     [Description("Returns Roslyn diagnostics (errors/warnings/info) for one file. Optional severity filter: Error | Warning | Info | Hidden.")]
     public Task<Contracts.ToolResult<GetDocumentDiagnosticsResult>> InvokeAsync(
         string filePath, string? severity,
-        CancellationToken ct)
+        string format = "structured",
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
@@ -42,7 +43,14 @@ internal sealed class GetDocumentDiagnosticsTool(IWorkspaceService ws, ILogger<G
                     Location: RoslynHelpers.ToLocation(d.Location) ?? new Contracts.SymbolLocation(filePath, 1, 1, 1, 1)))
                 .ToList();
 
-            return Contracts.ToolResult<GetDocumentDiagnosticsResult>.Ok(new GetDocumentDiagnosticsResult(mapped));
+            var result = new GetDocumentDiagnosticsResult(mapped);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+            {
+                var errCount = result.Diagnostics.Count(d => string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase));
+                var warnCount = result.Diagnostics.Count(d => string.Equals(d.Severity, "Warning", StringComparison.OrdinalIgnoreCase));
+                return Contracts.ToolResult<GetDocumentDiagnosticsResult>.OkSummary($"{errCount} errors, {warnCount} warnings");
+            }
+            return Contracts.ToolResult<GetDocumentDiagnosticsResult>.Ok(result);
         }, ct);
 
     private static DiagnosticSeverity? ParseSeverity(string? s)

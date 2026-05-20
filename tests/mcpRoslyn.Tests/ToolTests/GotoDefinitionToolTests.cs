@@ -19,7 +19,7 @@ public class GotoDefinitionToolTests
 
         // Line 3 (1-based): `public class EnglishGreeter : IGreeter`
         // 'I' of IGreeter is at column 31 (1-based, spaces only — no tabs).
-        var result = await host.Tool.InvokeAsync(englishGreeterPath, line: 3, column: 31, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(englishGreeterPath, line: 3, column: 31, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

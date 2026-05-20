@@ -18,7 +18,7 @@ public class ListDocumentSymbolsToolTests
             AppContext.BaseDirectory,
             "Fixtures", "TestSolution", "TestLib", "EnglishGreeter.cs");
 
-        var result = await host.Tool.InvokeAsync(englishGreeterPath, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(englishGreeterPath, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

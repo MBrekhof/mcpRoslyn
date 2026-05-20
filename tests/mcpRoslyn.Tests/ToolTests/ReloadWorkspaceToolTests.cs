@@ -12,7 +12,7 @@ public class ReloadWorkspaceToolTests
     public async Task ReloadWorkspace_returns_project_count_and_duration()
     {
         await using var host = await TestHost.CreateAsync<ReloadWorkspaceTool>();
-        var result = await host.Tool.InvokeAsync(CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

@@ -19,7 +19,8 @@ internal sealed class HoverTool(IWorkspaceService ws, ILogger<HoverTool> log)
     [Description("Returns type/signature info and XML doc summary for the symbol at the given cursor position.")]
     public Task<Contracts.ToolResult<HoverResult>> InvokeAsync(
         string filePath, int line, int column,
-        CancellationToken ct)
+        string format = "structured",
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
@@ -37,7 +38,10 @@ internal sealed class HoverTool(IWorkspaceService ws, ILogger<HoverTool> log)
             var signature = symbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
             var xmlDoc = ExtractSummary(symbol.GetDocumentationCommentXml(cancellationToken: ct2));
 
-            return Contracts.ToolResult<HoverResult>.Ok(new HoverResult(symbolInfo, xmlDoc, signature));
+            var result = new HoverResult(symbolInfo, xmlDoc, signature);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<HoverResult>.OkSummary(result.XmlDocSummary ?? result.Signature);
+            return Contracts.ToolResult<HoverResult>.Ok(result);
         }, ct);
 
     private static string? ExtractSummary(string? xml)

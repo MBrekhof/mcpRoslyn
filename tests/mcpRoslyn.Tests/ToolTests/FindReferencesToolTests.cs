@@ -22,7 +22,7 @@ public class FindReferencesToolTests
         //   2: (blank)
         //   3: public interface IGreeter
         // "public interface " is 17 chars, so `I` of IGreeter is at column 18.
-        var result = await host.Tool.InvokeAsync(iGreeterPath, line: 3, column: 18, symbolId: null, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(iGreeterPath, line: 3, column: 18, symbolId: null, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

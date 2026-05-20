@@ -13,7 +13,7 @@ public class SemanticSearchToolTests
     public async Task SemanticSearch_returns_expected_matches(string pattern, params string[] expectedNames)
     {
         await using var host = await TestHost.CreateAsync<SemanticSearchTool>();
-        var result = await host.Tool.InvokeAsync(pattern, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(pattern, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();
@@ -26,7 +26,7 @@ public class SemanticSearchToolTests
     public async Task SemanticSearch_has_attribute_finds_both_targets()
     {
         await using var host = await TestHost.CreateAsync<SemanticSearchTool>();
-        var result = await host.Tool.InvokeAsync("has-attribute:TestLib.MyMarkerAttribute", CancellationToken.None);
+        var result = await host.Tool.InvokeAsync("has-attribute:TestLib.MyMarkerAttribute", ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         var names = result.Result!.Matches.Select(m => m.Name).ToList();
@@ -38,7 +38,7 @@ public class SemanticSearchToolTests
     public async Task SemanticSearch_returns_filter_finds_int_returning_methods()
     {
         await using var host = await TestHost.CreateAsync<SemanticSearchTool>();
-        var result = await host.Tool.InvokeAsync("returns:int", CancellationToken.None);
+        var result = await host.Tool.InvokeAsync("returns:int", ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         var names = result.Result!.Matches.Select(m => m.Name).ToList();
@@ -50,7 +50,7 @@ public class SemanticSearchToolTests
     public async Task SemanticSearch_parameter_type_finds_methods_taking_string()
     {
         await using var host = await TestHost.CreateAsync<SemanticSearchTool>();
-        var result = await host.Tool.InvokeAsync("parameter-type:string", CancellationToken.None);
+        var result = await host.Tool.InvokeAsync("parameter-type:string", ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         var names = result.Result!.Matches.Select(m => m.Name).ToList();
@@ -61,7 +61,7 @@ public class SemanticSearchToolTests
     public async Task SemanticSearch_invalid_pattern_returns_error()
     {
         await using var host = await TestHost.CreateAsync<SemanticSearchTool>();
-        var result = await host.Tool.InvokeAsync("garbage:foo", CancellationToken.None);
+        var result = await host.Tool.InvokeAsync("garbage:foo", ct: CancellationToken.None);
 
         result.Error.Should().NotBeNull();
         result.Error!.Code.Should().Be("INVALID_PATTERN");

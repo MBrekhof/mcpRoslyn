@@ -30,6 +30,7 @@ internal sealed class TestMapTool(IWorkspaceService ws, ILogger<TestMapTool> log
         string? symbolId = null,
         string? filePath = null, int? line = null, int? column = null,
         int maxResults = 10,
+        string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
@@ -134,9 +135,12 @@ internal sealed class TestMapTool(IWorkspaceService ws, ILogger<TestMapTool> log
                 .Take(maxResults)
                 .ToList();
 
-            return Contracts.ToolResult<TestMapResult>.Ok(new TestMapResult(
+            var result = new TestMapResult(
                 Candidates: candidates,
-                TestProjectsScanned: testProjects.Select(p => p.Name).ToArray()));
+                TestProjectsScanned: testProjects.Select(p => p.Name).ToArray());
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<TestMapResult>.OkSummary($"{result.Candidates.Count} candidate tests");
+            return Contracts.ToolResult<TestMapResult>.Ok(result);
         }, ct);
 
     private static bool LooksLikeTestProject(Project p)
