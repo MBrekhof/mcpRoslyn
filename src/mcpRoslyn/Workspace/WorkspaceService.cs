@@ -17,6 +17,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     private readonly List<WorkspaceLoadDiagnostic> _diagnostics = new();
     private readonly object _diagnosticsLock = new();
     private SymbolIndex? _symbolIndex;
+    private InvocationIndex? _invocationIndex;
 
     public int LoadedProjectCount => _solution?.Projects.Count() ?? 0;
     public Task WarmupTask => _warmupTask;
@@ -28,6 +29,9 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
 
     public SymbolIndex SymbolIndex
         => _symbolIndex ?? throw new InvalidOperationException("Workspace not loaded.");
+
+    public InvocationIndex InvocationIndex
+        => _invocationIndex ?? throw new InvalidOperationException("Workspace not loaded.");
 
     public async Task LoadAsync(CancellationToken ct = default)
     {
@@ -68,7 +72,12 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
                     Microsoft.CodeAnalysis.Text.SourceText.From(text));
                 _mtimeCache[doc.Id] = diskMtime;
                 _symbolIndex?.MarkDirty(doc.Id);
+                _invocationIndex?.MarkDirty(doc.Id);
             }
+
+            // Update InvocationIndex's solution snapshot so dirty re-walks
+            // see the freshly-loaded document text.
+            _invocationIndex?.UpdateSolution(_solution);
 
             return _solution;
         }
@@ -79,6 +88,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     {
         lock (_diagnosticsLock) _diagnostics.Clear();
         _symbolIndex = new SymbolIndex();
+        _invocationIndex = new InvocationIndex();
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         _workspace = MSBuildWorkspace.Create();
@@ -149,6 +159,23 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
             catch (Exception ex)
             {
                 log.LogWarning(ex, "Symbol index build failed; semantic_search will fall back to live walks");
+            }
+        }
+
+        if (_invocationIndex is not null)
+        {
+            var invIndexSw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                await _invocationIndex.BuildAsync(solution, ct);
+                log.LogInformation(
+                    "Invocation index built in {Elapsed} ms",
+                    invIndexSw.ElapsedMilliseconds);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Invocation index build failed; find_entrypoints/find_registrations will be unavailable");
             }
         }
     }
