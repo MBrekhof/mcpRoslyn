@@ -8,6 +8,7 @@ public sealed class SymbolIndex
     private readonly Dictionary<string, List<IndexedSymbol>> _byAttribute = new();
     private readonly Dictionary<string, List<IndexedSymbol>> _byReturnType = new();
     private readonly Dictionary<string, List<IndexedSymbol>> _byParameterType = new();
+    private readonly List<IndexedSymbol> _all = new();
     private readonly HashSet<DocumentId> _dirty = new();
     private readonly object _gate = new();
 
@@ -34,6 +35,8 @@ public sealed class SymbolIndex
                     SymbolId: !string.IsNullOrEmpty(info.SymbolId) ? info.SymbolId : sym.ToDisplayString(),
                     DeclaringDocs: declaringDocs,
                     Info: info);
+
+                lock (_gate) _all.Add(entry);
 
                 foreach (var attr in sym.GetAttributes())
                 {
@@ -108,6 +111,11 @@ public sealed class SymbolIndex
             bucket, dirty, currentSolution,
             predicate: sym => sym is IMethodSymbol m && m.Parameters.Any(p => MatchesTypeName(p.Type, target)),
             ct);
+    }
+
+    public IReadOnlyList<IndexedSymbol> AllSymbols()
+    {
+        lock (_gate) return new List<IndexedSymbol>(_all);
     }
 
     // ---------- Helpers ----------
