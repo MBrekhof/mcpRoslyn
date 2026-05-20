@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
@@ -64,7 +65,7 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
                     "POSITION_INVALID", "Must provide either symbolId OR (filePath, line, column).");
             }
 
-            var truncated = new List<string>();
+            var truncated = new ConcurrentBag<string>();
 
             // Run section queries in parallel
             var hoverTask = includeHover
@@ -96,7 +97,7 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
                 Implementations: await implTask,
                 DerivedTypes:    await derivTask,
                 Callers:         await callTask,
-                Truncated:       truncated));
+                Truncated:       truncated.OrderBy(s => s, StringComparer.Ordinal).ToArray()));
         }, ct);
 
     // ── per-section helpers ──────────────────────────────────────────────────
@@ -122,7 +123,7 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
     }
 
     private static async Task<AnalyzeSymbolSection<Contracts.SymbolLocation>?> GetReferences(
-        ISymbol s, Solution sol, int max, List<string> trunc, CancellationToken ct)
+        ISymbol s, Solution sol, int max, ConcurrentBag<string> trunc, CancellationToken ct)
     {
         var refs  = await SymbolFinder.FindReferencesAsync(s, sol, ct);
         var items = refs
@@ -138,7 +139,7 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
     }
 
     private static async Task<AnalyzeSymbolSection<Contracts.SymbolInfo>?> GetImplementations(
-        ISymbol s, Solution sol, int max, List<string> trunc, CancellationToken ct)
+        ISymbol s, Solution sol, int max, ConcurrentBag<string> trunc, CancellationToken ct)
     {
         // Only types have implementations
         if (s is not INamedTypeSymbol) return null;
@@ -152,7 +153,7 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
     }
 
     private static async Task<AnalyzeSymbolSection<Contracts.SymbolInfo>?> GetDerivedTypes(
-        ISymbol s, Solution sol, int max, List<string> trunc, CancellationToken ct)
+        ISymbol s, Solution sol, int max, ConcurrentBag<string> trunc, CancellationToken ct)
     {
         // Only named types have derived types; for methods/properties return null
         if (s is not INamedTypeSymbol type) return null;
@@ -168,7 +169,7 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
     }
 
     private static async Task<AnalyzeSymbolSection<CallerEntry>?> GetCallers(
-        ISymbol s, Solution sol, int max, List<string> trunc, CancellationToken ct)
+        ISymbol s, Solution sol, int max, ConcurrentBag<string> trunc, CancellationToken ct)
     {
         var callers = await SymbolFinder.FindCallersAsync(s, sol, ct);
         var items = callers
