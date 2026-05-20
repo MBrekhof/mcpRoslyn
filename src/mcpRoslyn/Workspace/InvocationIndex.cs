@@ -362,8 +362,17 @@ public sealed class InvocationIndex
             else if (member is INamedTypeSymbol type)
             {
                 yield return type;
-                foreach (var nested in type.GetTypeMembers()) yield return nested;
+                foreach (var nested in WalkNested(type)) yield return nested;
             }
+        }
+    }
+
+    private static IEnumerable<INamedTypeSymbol> WalkNested(INamedTypeSymbol type)
+    {
+        foreach (var nested in type.GetTypeMembers())
+        {
+            yield return nested;
+            foreach (var inner in WalkNested(nested)) yield return inner;
         }
     }
 }
