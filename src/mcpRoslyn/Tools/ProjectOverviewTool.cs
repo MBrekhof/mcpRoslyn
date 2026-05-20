@@ -43,7 +43,7 @@ internal sealed class ProjectOverviewTool(IWorkspaceService ws, ILogger<ProjectO
                     .Where(n => n is not null)
                     .Take(maxProjectReferencesPerProject)
                     .ToArray()!,
-                PackageReferences: ReadPackageRefsFromCsproj(p.FilePath, maxPackagesPerProject)
+                PackageReferences: ReadPackageRefsFromCsproj(p.FilePath, maxPackagesPerProject, log)
             )).ToArray();
 
             return Contracts.ToolResult<ProjectOverviewResult>.Ok(new ProjectOverviewResult(
@@ -58,7 +58,7 @@ internal sealed class ProjectOverviewTool(IWorkspaceService ws, ILogger<ProjectO
     /// packages whose TFM doesn't match the target framework (e.g., netstandard
     /// packages in a net10.0 project).
     /// </summary>
-    private static IReadOnlyList<PackageRef> ReadPackageRefsFromCsproj(string? csprojPath, int max)
+    private static IReadOnlyList<PackageRef> ReadPackageRefsFromCsproj(string? csprojPath, int max, ILogger log)
     {
         if (string.IsNullOrEmpty(csprojPath) || !File.Exists(csprojPath))
             return Array.Empty<PackageRef>();
@@ -74,8 +74,9 @@ internal sealed class ProjectOverviewTool(IWorkspaceService ws, ILogger<ProjectO
                 .Take(max)
                 .ToArray();
         }
-        catch
+        catch (Exception ex)
         {
+            log.LogWarning(ex, "Failed to parse {Path}", csprojPath);
             return Array.Empty<PackageRef>();
         }
     }
