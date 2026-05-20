@@ -11,14 +11,14 @@ public class ListDocumentSymbolsToolTests
     [Test]
     public async Task ListDocumentSymbols_returns_class_and_method_for_EnglishGreeter()
     {
-        var sut = await TestHost.CreateAsync<ListDocumentSymbolsTool>();
+        await using var host = await TestHost.CreateAsync<ListDocumentSymbolsTool>();
 
         // The fixture is in the test output directory.
         var englishGreeterPath = Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures", "TestSolution", "TestLib", "EnglishGreeter.cs");
 
-        var result = await sut.InvokeAsync(englishGreeterPath, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(englishGreeterPath, CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

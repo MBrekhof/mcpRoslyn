@@ -11,8 +11,8 @@ public class GetCompilationErrorsToolTests
     [Test]
     public async Task GetCompilationErrors_returns_at_least_one_error()
     {
-        var sut = await TestHost.CreateAsync<GetCompilationErrorsTool>();
-        var result = await sut.InvokeAsync(severity: null, projectName: null, CancellationToken.None);
+        await using var host = await TestHost.CreateAsync<GetCompilationErrorsTool>();
+        var result = await host.Tool.InvokeAsync(severity: null, projectName: null, CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();
@@ -22,8 +22,8 @@ public class GetCompilationErrorsToolTests
     [Test]
     public async Task GetCompilationErrors_filtered_to_TestLib_returns_no_errors()
     {
-        var sut = await TestHost.CreateAsync<GetCompilationErrorsTool>();
-        var result = await sut.InvokeAsync(severity: "Error", projectName: "TestLib", CancellationToken.None);
+        await using var host2 = await TestHost.CreateAsync<GetCompilationErrorsTool>();
+        var result = await host2.Tool.InvokeAsync(severity: "Error", projectName: "TestLib", CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

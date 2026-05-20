@@ -11,13 +11,13 @@ public class FindImplementationsToolTests
     [Test]
     public async Task FindImplementations_IGreeter_returns_two_impls()
     {
-        var sut = await TestHost.CreateAsync<FindImplementationsTool>();
+        await using var host = await TestHost.CreateAsync<FindImplementationsTool>();
         var iGreeterPath = Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures", "TestSolution", "TestLib", "IGreeter.cs");
 
         // line 3 col 18 lands on IGreeter identifier — same position as find_references test
-        var result = await sut.InvokeAsync(iGreeterPath, line: 3, column: 18, symbolId: null, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(iGreeterPath, line: 3, column: 18, symbolId: null, CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

@@ -11,8 +11,8 @@ public sealed class ProjectOverviewToolTests
     [Test]
     public async Task Returns_all_four_fixture_projects()
     {
-        var sut = await TestHost.CreateAsync<ProjectOverviewTool>();
-        var result = await sut.InvokeAsync();
+        await using var host = await TestHost.CreateAsync<ProjectOverviewTool>();
+        var result = await host.Tool.InvokeAsync();
 
         result.Result.Should().NotBeNull();
         result.Result!.Projects.Should().HaveCount(4);
@@ -23,8 +23,8 @@ public sealed class ProjectOverviewToolTests
     [Test]
     public async Task TestWeb_lists_its_project_reference_to_TestLib()
     {
-        var sut = await TestHost.CreateAsync<ProjectOverviewTool>();
-        var result = await sut.InvokeAsync();
+        await using var host = await TestHost.CreateAsync<ProjectOverviewTool>();
+        var result = await host.Tool.InvokeAsync();
         var web = result.Result!.Projects.Single(p => p.Name == "TestWeb");
         web.ProjectReferences.Should().Contain("TestLib");
     }
@@ -32,8 +32,8 @@ public sealed class ProjectOverviewToolTests
     [Test]
     public async Task TestTests_lists_xunit_abstractions_package()
     {
-        var sut = await TestHost.CreateAsync<ProjectOverviewTool>();
-        var result = await sut.InvokeAsync();
+        await using var host = await TestHost.CreateAsync<ProjectOverviewTool>();
+        var result = await host.Tool.InvokeAsync();
         var tests = result.Result!.Projects.Single(p => p.Name == "TestTests");
         tests.PackageReferences.Should().Contain(p => p.Name.Contains("xunit.abstractions"));
     }

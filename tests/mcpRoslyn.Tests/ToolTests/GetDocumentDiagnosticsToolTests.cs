@@ -11,12 +11,12 @@ public class GetDocumentDiagnosticsToolTests
     [Test]
     public async Task GetDocumentDiagnostics_BrokenClass_returns_at_least_one_error()
     {
-        var sut = await TestHost.CreateAsync<GetDocumentDiagnosticsTool>();
+        await using var host = await TestHost.CreateAsync<GetDocumentDiagnosticsTool>();
         var brokenPath = Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures", "TestSolution", "TestApp", "BrokenClass.cs");
 
-        var result = await sut.InvokeAsync(brokenPath, severity: null, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(brokenPath, severity: null, CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

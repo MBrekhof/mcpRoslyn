@@ -24,9 +24,29 @@ internal sealed class TestWorkspaceHost : IAsyncDisposable
     public ValueTask DisposeAsync() => _workspaceService.DisposeAsync();
 }
 
+/// <summary>
+/// A disposable host that exposes a single tool instance.
+/// Allows <c>await using var host = await TestHost.CreateAsync&lt;MyTool&gt;();</c>
+/// while keeping the underlying WorkspaceService lifetime tied to the host.
+/// </summary>
+internal sealed class ToolHost<T> : IAsyncDisposable where T : class
+{
+    private readonly WorkspaceService _workspace;
+
+    internal ToolHost(T tool, WorkspaceService workspace)
+    {
+        Tool = tool;
+        _workspace = workspace;
+    }
+
+    public T Tool { get; }
+
+    public ValueTask DisposeAsync() => _workspace.DisposeAsync();
+}
+
 internal static class TestHost
 {
-    public static async Task<T> CreateAsync<T>() where T : class
+    public static async Task<ToolHost<T>> CreateAsync<T>() where T : class
     {
         if (!MSBuildLocator.IsRegistered) MSBuildLocator.RegisterDefaults();
 
@@ -44,7 +64,8 @@ internal static class TestHost
         services.AddSingleton<IWorkspaceService>(workspace);
         services.AddSingleton<T>();
         services.AddLogging();
-        return services.BuildServiceProvider().GetRequiredService<T>();
+        var tool = services.BuildServiceProvider().GetRequiredService<T>();
+        return new ToolHost<T>(tool, workspace);
     }
 
     /// <summary>

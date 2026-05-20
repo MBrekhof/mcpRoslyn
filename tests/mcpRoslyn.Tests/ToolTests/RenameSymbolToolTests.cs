@@ -11,7 +11,7 @@ public class RenameSymbolToolTests
     [Test]
     public async Task RenameSymbol_preview_returns_edits_without_writing()
     {
-        var sut = await TestHost.CreateAsync<RenameSymbolTool>();
+        await using var host = await TestHost.CreateAsync<RenameSymbolTool>();
         var englishGreeterPath = Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures", "TestSolution", "TestLib", "EnglishGreeter.cs");
@@ -20,7 +20,7 @@ public class RenameSymbolToolTests
 
         // EnglishGreeter.cs line 5: `    public string Greet(string name) => $"Hello, {name}!";`
         // 'G' of Greet at column 19. Rename to "Salute" with applyEdits=false (default).
-        var result = await sut.InvokeAsync(
+        var result = await host.Tool.InvokeAsync(
             englishGreeterPath, line: 5, column: 19,
             newName: "Salute",
             applyEdits: false,
@@ -37,7 +37,7 @@ public class RenameSymbolToolTests
     [Test]
     public async Task RenameSymbol_applyEdits_writes_files()
     {
-        var sut = await TestHost.CreateAsync<RenameSymbolTool>();
+        await using var host2 = await TestHost.CreateAsync<RenameSymbolTool>();
         var dutchPath = Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures", "TestSolution", "TestLib", "DutchGreeter.cs");
@@ -47,7 +47,7 @@ public class RenameSymbolToolTests
         {
             // DutchGreeter.cs line 3: `public class DutchGreeter : IGreeter`
             // 'D' of DutchGreeter at column 14 (after "public class ")
-            var result = await sut.InvokeAsync(
+            var result = await host2.Tool.InvokeAsync(
                 dutchPath, line: 3, column: 14,
                 newName: "NederlandseGreeter",
                 applyEdits: true,

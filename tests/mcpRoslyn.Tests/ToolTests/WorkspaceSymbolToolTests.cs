@@ -11,9 +11,9 @@ public class WorkspaceSymbolToolTests
     [Test]
     public async Task WorkspaceSymbol_finds_Greeter_types()
     {
-        var sut = await TestHost.CreateAsync<WorkspaceSymbolTool>();
+        await using var host = await TestHost.CreateAsync<WorkspaceSymbolTool>();
 
-        var result = await sut.InvokeAsync("Greeter", null, null, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync("Greeter", null, null, CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();
@@ -26,9 +26,9 @@ public class WorkspaceSymbolToolTests
     [Test]
     public async Task WorkspaceSymbol_respects_kinds_filter()
     {
-        var sut = await TestHost.CreateAsync<WorkspaceSymbolTool>();
+        await using var host2 = await TestHost.CreateAsync<WorkspaceSymbolTool>();
 
-        var result = await sut.InvokeAsync("Greeter", new[] { "Interface" }, null, CancellationToken.None);
+        var result = await host2.Tool.InvokeAsync("Greeter", new[] { "Interface" }, null, CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();
