@@ -11,3 +11,8 @@ public class MarkedType
     [MyMarker]
     public void MarkedMethod() { }
 }
+
+internal sealed class UnreferencedInternalType
+{
+    public int Value { get; set; }
+}

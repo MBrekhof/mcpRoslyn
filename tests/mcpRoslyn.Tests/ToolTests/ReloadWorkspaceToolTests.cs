@@ -17,7 +17,7 @@ public class ReloadWorkspaceToolTests
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();
         result.Result!.Loaded.Should().BeTrue();
-        result.Result.ProjectCount.Should().Be(2);
+        result.Result.ProjectCount.Should().Be(4);
         result.Result.DurationMs.Should().BeGreaterThan(0);
         result.Result.Diagnostics.Should().NotBeNull();
         result.Result.Diagnostics.Should().BeEmpty(
