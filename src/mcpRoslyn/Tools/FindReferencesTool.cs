@@ -52,13 +52,20 @@ internal sealed class FindReferencesTool(IWorkspaceService ws, ILogger<FindRefer
 
             var refs = await SymbolFinder.FindReferencesAsync(symbol, solution, ct2);
 
+            // Dedup by source span. Roslyn can emit the same reference site under multiple
+            // ReferencedSymbol entries (cascade across partial declarations, interface-member
+            // implementation linking) and the same site can recur across compilations of
+            // multi-targeted projects. A reference site is conceptually unique per source position.
             var locations = new List<Contracts.SymbolLocation>();
+            var seen = new HashSet<(string, int, int, int, int)>();
             foreach (var r in refs)
             {
                 foreach (var loc in r.Locations)
                 {
                     var sl = RoslynHelpers.ToLocation(loc.Location);
-                    if (sl is not null) locations.Add(sl);
+                    if (sl is null) continue;
+                    if (!seen.Add((sl.FilePath, sl.Line, sl.Column, sl.EndLine, sl.EndColumn))) continue;
+                    locations.Add(sl);
                 }
             }
 
