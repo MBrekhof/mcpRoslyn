@@ -16,6 +16,10 @@ internal sealed class GetDocumentDiagnosticsTool(IWorkspaceService ws, ILogger<G
     [Description("Returns Roslyn diagnostics (errors/warnings/info) for one file. Optional severity filter: Error | Warning | Info | Hidden.")]
     public Task<Contracts.ToolResult<GetDocumentDiagnosticsResult>> InvokeAsync(
         string filePath, string? severity,
+        bool includeGenerated = true,
+        string? minimumSeverity = "Warning",
+        string[]? excludeDiagnosticCodes = null,
+        string[]? excludeDiagnosticSources = null,
         string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
@@ -31,11 +35,11 @@ internal sealed class GetDocumentDiagnosticsTool(IWorkspaceService ws, ILogger<G
                 return Contracts.ToolResult<GetDocumentDiagnosticsResult>.Fail(
                     "INTERNAL_ERROR", "Could not obtain semantic model.");
 
-            var minSeverity = ParseSeverity(severity);
+            var exactSeverity = ParseSeverity(severity);
 
             var diagnostics = semantic.GetDiagnostics(cancellationToken: ct2);
             var mapped = diagnostics
-                .Where(d => minSeverity is null || d.Severity == minSeverity.Value)
+                .Where(d => exactSeverity is null || d.Severity == exactSeverity.Value)
                 .Select(d => new Contracts.DiagnosticInfo(
                     Severity: d.Severity.ToString(),
                     Code: d.Id,
@@ -43,7 +47,11 @@ internal sealed class GetDocumentDiagnosticsTool(IWorkspaceService ws, ILogger<G
                     Location: RoslynHelpers.ToLocation(d.Location) ?? new Contracts.SymbolLocation(filePath, 1, 1, 1, 1)))
                 .ToList();
 
-            var result = new GetDocumentDiagnosticsResult(mapped);
+            // Post-collection filters (applied in order; do not affect index construction)
+            var filtered = GetCompilationErrorsTool.ApplyFilters(
+                mapped, includeGenerated, minimumSeverity, excludeDiagnosticCodes, excludeDiagnosticSources);
+
+            var result = new GetDocumentDiagnosticsResult(filtered);
             if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
             {
                 var errCount = result.Diagnostics.Count(d => string.Equals(d.Severity, "Error", StringComparison.OrdinalIgnoreCase));

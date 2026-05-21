@@ -23,4 +23,27 @@ public class GetDocumentDiagnosticsToolTests
         result.Result!.Diagnostics.Should().NotBeEmpty();
         result.Result.Diagnostics.Should().Contain(d => d.Severity == "Error" && d.Code.StartsWith("CS"));
     }
+
+    [Test]
+    public async Task ExcludeDiagnosticCodes_filters_specified_codes()
+    {
+        await using var host = await TestHost.CreateAsync<GetDocumentDiagnosticsTool>();
+        var brokenPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures", "TestSolution", "TestApp", "BrokenClass.cs");
+
+        // BrokenClass.cs produces CS1525 — assert it appears WITHOUT the filter
+        var baseline = await host.Tool.InvokeAsync(
+            brokenPath, severity: null,
+            minimumSeverity: "All",
+            ct: CancellationToken.None);
+        baseline.Result!.Diagnostics.Should().Contain(d => d.Code == "CS1525");
+
+        var filtered = await host.Tool.InvokeAsync(
+            brokenPath, severity: null,
+            minimumSeverity: "All",
+            excludeDiagnosticCodes: new[] { "CS1525" },
+            ct: CancellationToken.None);
+        filtered.Result!.Diagnostics.Should().NotContain(d => d.Code == "CS1525");
+    }
 }
