@@ -49,13 +49,19 @@ internal sealed class FindImplementationsTool(IWorkspaceService ws, ILogger<Find
 
             var impls = await SymbolFinder.FindImplementationsAsync(symbol, solution, projects: null, ct2);
 
+            // Dedup by source span — an implementation site is conceptually unique per
+            // source position. Mirrors the FindReferencesTool pattern; same Roslyn quirks
+            // (partial declarations, multi-targeted projects) can otherwise double-count.
             var locations = new List<Contracts.SymbolLocation>();
+            var seen = new HashSet<(string, int, int, int, int)>();
             foreach (var impl in impls)
             {
                 foreach (var loc in impl.Locations)
                 {
                     var sl = RoslynHelpers.ToLocation(loc);
-                    if (sl is not null) locations.Add(sl);
+                    if (sl is null) continue;
+                    if (!seen.Add((sl.FilePath, sl.Line, sl.Column, sl.EndLine, sl.EndColumn))) continue;
+                    locations.Add(sl);
                 }
             }
 
