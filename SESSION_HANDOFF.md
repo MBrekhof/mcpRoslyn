@@ -1,64 +1,48 @@
 # Session Handoff
 
-**Last updated:** 2026-05-16 (end of SymbolIndex shipping session — v1.2)
+**Last updated:** 2026-05-21 (end of v1.3 feature-expansion session)
 
 ## Where things stand
 
-- **v1.2 shipped:** `SymbolIndex` cuts `semantic_search has-attribute:` / `returns:` / `parameter-type:` from O(symbols-per-call) to O(matches) via a per-load index built during warm-up. Always-fresh semantics preserved via a dirty-doc walk on every query.
-- Branch `main`, working tree clean, fully pushed to `origin` (`d941e02`). Repo public on GitHub.
-- **Tests:** 46 passing (was 38 at start of session, +8 new in `SymbolIndexTests`).
-- **All v1.1 acceptance-driven follow-ups are now closed.**
+- **v1.3 shipped:** 7 new tools + `format` parameter on every tool + diagnostics filter knobs. `InvocationIndex` added as a sibling to `SymbolIndex` to back `find_entrypoints` and `find_registrations`.
+- Branch `feat/v1.3-feature-expansion`, working tree clean. **NOT YET merged to main.** Awaiting acceptance run (Task 13).
+- **Tests:** 103 passing (was 46 at start of session, +57 new across all new tool test classes).
+- **All v1.3 planned items are now closed** (see [`TODO.md`](TODO.md)).
 
 ## What shipped this session
 
-Earlier today (with you):
-- `062834e` design spec — warm-up
-- `d249744` implementation plan — warm-up
-- `a22cd8d` feat: background warm-up pre-compilation (4.5× first-query speedup)
-- `7ff11d0` test: LoadAsync returns before warm-up completes
-- `e993af5` docs: v1.1 warm-up acceptance log
-- `a8a970a` docs: TODO closeout + `--log-file` follow-up
-- `42df6b7` release prep — LICENSE (MIT), README, ARCHITECTURE, SESSION_HANDOFF
-- `e712244` chore: gitignore excalidraw.log
+```
+6ce66a0 docs: surface diagnostic filter defaults in tool descriptions
+caa0679 feat: diagnostics filter knobs (includeGenerated, excludeCodes, minimumSeverity)
+67edfa7 fix: tolerate CRLF in MyAttribute.cs fixture in dirty-walk removal test
+bf8f727 feat: format param on all tools (structured | summary) for context economy
+d146f6f feat: find_dead_code_candidates tool with denylist + InternalsVisibleTo handling
+d91f4dc feat: test_map tool — production-to-test heuristic
+3edc777 fix: thread-safe Truncated collection in analyze_symbol
+8feae51 feat: analyze_symbol composite tool
+7d8821d feat: find_callees tool — outgoing call detection mirror of find_callers
+f85bd95 feat: find_registrations tool with DI lifetime + likely consumer detection
+bf7d887 feat: find_entrypoints tool (routes, middleware, hosted services)
+081c45c fix: log .csproj XML parse failures instead of silent swallow
+21626c1 feat: project_overview tool with solution structure and refs
+e3c2896 fix: recursive nested-type walk for BackgroundService detection
+6e5baef feat: InvocationIndex skeleton (routes, middleware, hosted services, DI)
+5fae067 test: extend fixture with TestWeb + TestTests projects and dead-code injections
+```
 
-Autonomous run #1 (`--log-file`, `find_callers` hint, MSBuild diagnostics):
-- `421cc8f` feat: `--log-file <path>` flag
-- `f938fb0` feat: `find_callers` SYMBOL_NOT_FOUND hint
-- `417e86b` feat: MSBuild `WorkspaceLoadDiagnostic` surfacing
-- `34302ae` docs: close shipped items
+## Material changes in v1.3
 
-v1.2 SymbolIndex (this run):
-- `204013c` docs: SymbolIndex design spec
-- `fed01ac` docs: SymbolIndex implementation plan
-- `b593f89` feat: SymbolIndex skeleton wired into WorkspaceService lifecycle
-- `0957af7` feat: SymbolIndex.QueryAttribute backed by per-project parallel build
-- `3fdc4af` feat: SymbolIndex covers returns: and parameter-type:
-- `744f36f` test: dirty walk + reload + partial-class correctness
-- `d941e02` feat: route has-attribute/returns/parameter-type via SymbolIndex
-- *(this commit)* docs: TODO + ARCHITECTURE + handoff for v1.2
+**New class** `mcpRoslyn.Workspace.InvocationIndex` — sibling to `SymbolIndex`, built during warm-up, owned by `WorkspaceService`, exposed via `IWorkspaceService.InvocationIndex`. Walks `InvocationExpressionSyntax` in each project's syntax trees during build, classifying into four buckets: routes, middleware, hosted services, and DI registrations (with `Unclassified[]` for unrecognised `IServiceCollection` extension calls). Lifecycle and dirty-doc handling mirror `SymbolIndex`. Reconstructed on `ReloadAsync`.
 
-## Material changes in v1.2
+**New field** `Summary` on `ToolResult<T>` — every tool now accepts `format = "structured" | "summary"` (default `structured`). In summary mode `Result` is null and `Summary` holds a one-line human description. Errors are always structured. Backwards-compatible with v1.2 callers.
 
-**New class** `mcpRoslyn.Workspace.SymbolIndex` — public sealed because it's exposed on the public `IWorkspaceService` interface. Owns three dictionaries (`_byAttribute`, `_byReturnType`, `_byParameterType`) keyed by both display string AND fully-qualified metadata name (mirrors the existing `MatchesTypeName` fallback). `BuildAsync` runs after `WarmupAsync`'s compilations finish, walking all symbols in parallel per project. `MarkDirty(DocumentId)` is called from `GetFreshSolutionAsync` whenever it replaces a document via `WithDocumentText`. `QueryAttribute` / `QueryReturnType` / `QueryParameterType` filter out cached entries whose `DeclaringDocs` intersect the dirty set, then walk just the dirty documents fresh and merge — preserves the v1 always-fresh semantics with sub-100ms cost on the 95% path (no edits since load).
-
-**Public surface change** on `IWorkspaceService`: added `SymbolIndex SymbolIndex { get; }` (throws if accessed before `LoadAsync` completes). Spec deviation: the spec wanted `SymbolIndex` to be `internal`, but a public interface property forces a public type — accepted the tradeoff.
-
-**`SemanticSearchTool` refactor**: the three slow `case` blocks now delegate to `Workspace.SymbolIndex.QueryX`. `WalkAllSymbols` and `MatchesTypeName` static helpers removed from this file — they live in `SymbolIndex` now. `derives-from:` / `implements:` / invalid-pattern paths untouched.
-
-**`TestHost.CreateAsync` change**: now also awaits `WarmupTask` after `LoadAsync`. Without this fix, the `SemanticSearchToolTests` regressions were intermittent — tool calls were racing the background index build and seeing empty buckets. The fix is generic for any future index-dependent tool.
+**New method** `SymbolIndex.AllSymbols()` — flat enumeration across all three index dictionaries, used by `find_dead_code_candidates` to walk the full symbol population without a Roslyn compilation pass. Does not participate in the dirty-walk (stale data possible after edits; acceptable for a run-occasionally tool).
 
 ## What's next
 
-All v1.1 acceptance-driven items are closed. Remaining open work in [`TODO.md`](TODO.md):
-
-1. **Re-measure on duetGPT.** Republish exe (close any running `mcpRoslyn.exe` first; PID from `tasklist`), restart a Claude Code session in `c:\projects\duetgpt`, re-run the v1 reference queries with `--log-file` so the warm-up + index-build timings are captured. Predictions:
-   - `has-attribute:McpServerToolType`: 11 049 ms (v1) → 7 745 ms (v1.1) → **sub-100 ms (v1.2)**
-   - First `find_references`: should still hit the warm-up 4.5× win from v1.1
-   - `find_implementations` 300 → 832 ms regression worth confirming on a fresh run
-2. **Nice-to-haves spotted along the way** (see [`TODO.md`](TODO.md)):
-   - Extract `ProjectName` from `WorkspaceLoadDiagnostic.Message`.
-   - Migrate off the obsolete `Workspace.WorkspaceFailed` to `RegisterWorkspaceFailedHandler` (removes CS0618).
-3. **Real-session validation.** Use mcpRoslyn in one duetGPT feature task; capture friction. Acceptance logs cover canned-query correctness, not agent-loop ergonomics.
+1. **Task 13 acceptance run on duetGPT.** Re-publish exe (close any running `mcpRoslyn.exe` first), restart a Claude Code session in `c:\projects\duetgpt`, run both the v1.2 reference queries and the 7 new v1.3 queries, write `docs/acceptance/2026-05-21-v1.3-acceptance.md`.
+2. **Merge `feat/v1.3-feature-expansion` to main** once acceptance passes.
+3. **Remaining nice-to-haves** — see `## Nice-to-haves spotted during v1.3` in [`TODO.md`](TODO.md).
 
 ## Known limitations / gotchas (unchanged)
 
@@ -78,6 +62,8 @@ dotnet test mcpRoslyn.slnx -c Release
 
 # Run a targeted test class
 dotnet test mcpRoslyn.slnx --filter "FullyQualifiedName~SymbolIndexTests" -c Release
+dotnet test mcpRoslyn.slnx --filter "FullyQualifiedName~InvocationIndexTests" -c Release
+dotnet test mcpRoslyn.slnx --filter "FullyQualifiedName~FindDeadCodeCandidatesToolTests" -c Release
 
 # Re-publish the exe (close any running mcpRoslyn.exe first)
 dotnet publish src/mcpRoslyn -c Release -o bin/publish
@@ -90,8 +76,9 @@ mcpRoslyn.exe --log-file c:\users\marti\.claude\debug\mcpRoslyn.log
 
 ## Reference
 
-- Architecture summary: [`ARCHITECTURE.md`](ARCHITECTURE.md) (now includes `SymbolIndex` section)
+- Architecture summary: [`ARCHITECTURE.md`](ARCHITECTURE.md) (now includes `InvocationIndex` section and 19-tool surface table)
 - Open work: [`TODO.md`](TODO.md)
 - v1 design + plan + acceptance: `docs/plans/2026-05-15-*.md`, `docs/acceptance/2026-05-15-v1-acceptance.md`
 - v1.1 warm-up: `docs/plans/2026-05-16-warmup-precompilation-{design,implementation}.md`, `docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`
-- v1.2 SymbolIndex: `docs/plans/2026-05-16-attribute-index-{design,implementation}.md`
+- v1.2 SymbolIndex: `docs/plans/2026-05-16-attribute-index-{design,implementation}.md`, `docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md`
+- v1.3 feature-expansion: `docs/plans/2026-05-20-v1.3-feature-expansion-{design,implementation}.md`
