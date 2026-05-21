@@ -1,48 +1,43 @@
 # Session Handoff
 
-**Last updated:** 2026-05-21 (end of v1.3 feature-expansion session)
+**Last updated:** 2026-05-21 (end of v1.3 acceptance + merge to main)
 
 ## Where things stand
 
-- **v1.3 shipped:** 7 new tools + `format` parameter on every tool + diagnostics filter knobs. `InvocationIndex` added as a sibling to `SymbolIndex` to back `find_entrypoints` and `find_registrations`.
-- Branch `feat/v1.3-feature-expansion`, working tree clean. **NOT YET merged to main.** Awaiting acceptance run (Task 13).
-- **Tests:** 103 passing (was 46 at start of session, +57 new across all new tool test classes).
-- **All v1.3 planned items are now closed** (see [`TODO.md`](TODO.md)).
+- **v1.3 IS LIVE ON MAIN.** Merged via `--no-ff` (merge commit `33d8ad4`). Tag not yet cut; do that next session if you want `v1.3.0` to be addressable.
+- Branch `feat/v1.3-feature-expansion` still exists on origin (left for issue-referencing convenience; safe to delete once #1–#4 are closed).
+- Working tree on main is clean.
+- **Tests:** 103 passing (unchanged from end of feature-expansion session — this session was acceptance + merge, no source changes).
+- **Acceptance verdict: PASS-WITH-FOLLOWUPS.** Full report at `docs/acceptance/2026-05-21-v1.3-acceptance.md`.
 
-## What shipped this session
+## What this session did
 
-```
-6ce66a0 docs: surface diagnostic filter defaults in tool descriptions
-caa0679 feat: diagnostics filter knobs (includeGenerated, excludeCodes, minimumSeverity)
-67edfa7 fix: tolerate CRLF in MyAttribute.cs fixture in dirty-walk removal test
-bf8f727 feat: format param on all tools (structured | summary) for context economy
-d146f6f feat: find_dead_code_candidates tool with denylist + InternalsVisibleTo handling
-d91f4dc feat: test_map tool — production-to-test heuristic
-3edc777 fix: thread-safe Truncated collection in analyze_symbol
-8feae51 feat: analyze_symbol composite tool
-7d8821d feat: find_callees tool — outgoing call detection mirror of find_callers
-f85bd95 feat: find_registrations tool with DI lifetime + likely consumer detection
-bf7d887 feat: find_entrypoints tool (routes, middleware, hosted services)
-081c45c fix: log .csproj XML parse failures instead of silent swallow
-21626c1 feat: project_overview tool with solution structure and refs
-e3c2896 fix: recursive nested-type walk for BackgroundService detection
-6e5baef feat: InvocationIndex skeleton (routes, middleware, hosted services, DI)
-5fae067 test: extend fixture with TestWeb + TestTests projects and dead-code injections
-```
+1. **Ran the v1.3 acceptance plan against duetGPT** (4 projects, 492 documents). All 7 new tools functional and correct; format-summary and filter-knob smokes both green. Server-internal timings pulled from `mcpRoslyn-v1.3.log` for accuracy (Claude→MCP wall-clock had too much transport overhead to be useful).
+2. **Filled in `docs/acceptance/2026-05-21-v1.3-acceptance.md`** with measurements, spot-check accuracy notes, surfaced issues, and verdict.
+3. **Filed 4 GitHub issues** for the regressions + correctness bug (see "Open follow-ups" below).
+4. **Merged `feat/v1.3-feature-expansion` → `main` with `--no-ff`** and pushed.
 
-## Material changes in v1.3
+## Open follow-ups (filed as GitHub issues)
 
-**New class** `mcpRoslyn.Workspace.InvocationIndex` — sibling to `SymbolIndex`, built during warm-up, owned by `WorkspaceService`, exposed via `IWorkspaceService.InvocationIndex`. Walks `InvocationExpressionSyntax` in each project's syntax trees during build, classifying into four buckets: routes, middleware, hosted services, and DI registrations (with `Unclassified[]` for unrecognised `IServiceCollection` extension calls). Lifecycle and dirty-doc handling mirror `SymbolIndex`. Reconstructed on `ReloadAsync`.
+| # | Title | Type |
+|---|---|---|
+| [#1](https://github.com/MBrekhof/mcpRoslyn/issues/1) | InvocationIndex warm-up cost ~30x over predicted budget (~13s vs +400ms) | enhancement |
+| [#2](https://github.com/MBrekhof/mcpRoslyn/issues/2) | `find_references` cold-cache 2.8x regression (641ms → 1803ms) | bug |
+| [#3](https://github.com/MBrekhof/mcpRoslyn/issues/3) | `find_implementations` 8.4x regression (321ms → 2682ms) — **highest priority** | bug |
+| [#4](https://github.com/MBrekhof/mcpRoslyn/issues/4) | `find_references` returns inconsistent counts across calls (35 vs 34, same symbol) | bug |
 
-**New field** `Summary` on `ToolResult<T>` — every tool now accepts `format = "structured" | "summary"` (default `structured`). In summary mode `Result` is null and `Summary` holds a one-line human description. Errors are always structured. Backwards-compatible with v1.2 callers.
+**Recommended order of attack:** #3 first (biggest absolute hit), then #2 (likely shares a root cause), then #1 (architectural — InvocationIndex laziness), then #4 (a unit test will likely surface the bug fast). All four are tractable; none is catastrophic on the existing code paths.
 
-**New method** `SymbolIndex.AllSymbols()` — flat enumeration across all three index dictionaries, used by `find_dead_code_candidates` to walk the full symbol population without a Roslyn compilation pass. Does not participate in the dirty-walk (stale data possible after edits; acceptable for a run-occasionally tool).
+## Two additional observations (not filed — context, not bugs)
 
-## What's next
+- **`find_dead_code_candidates` false-positives on Blazor `.razor.cs` files.** Event handlers and `[Inject]` properties get flagged because mcpRoslyn doesn't see Razor markup. Worth either skipping classes deriving from `Microsoft.AspNetCore.Components.ComponentBase` or down-weighting them. Mention in #1 follow-up planning if you tackle the Blazor source-generator integration later.
+- **Baseline duetGPT carries 622 diagnostics including hard errors** (`CS0234`, `CS0246`, `CS0103`, `CS0115`, `CS0117`, `CS0120`). All trace back to mcpRoslyn not running Blazor source generators, so `App`, `StateHasChanged`, `Pages` namespace, `DbContext.Documents`, and related symbols look missing. **Not a v1.3 regression** — same in v1.2. Long-term fix is deeper MSBuild integration; documented as known limitation.
 
-1. **Task 13 acceptance run on duetGPT.** Re-publish exe (close any running `mcpRoslyn.exe` first), restart a Claude Code session in `c:\projects\duetgpt`, run both the v1.2 reference queries and the 7 new v1.3 queries, write `docs/acceptance/2026-05-21-v1.3-acceptance.md`.
-2. **Merge `feat/v1.3-feature-expansion` to main** once acceptance passes.
-3. **Remaining nice-to-haves** — see `## Nice-to-haves spotted during v1.3` in [`TODO.md`](TODO.md).
+## What's next when you return
+
+1. **Tag `v1.3.0` on main** if you want it addressable: `git tag -a v1.3.0 33d8ad4 -m "v1.3 — 7 new tools, format-summary, filter knobs" && git push origin v1.3.0`. (Not done by this session — wasn't asked, but it's a one-liner.)
+2. **Pick up issue #3** (`find_implementations` 8.4x regression) — biggest user-visible win.
+3. **Optionally delete** `feat/v1.3-feature-expansion` from origin once issues #1–#4 stop referencing it.
 
 ## Known limitations / gotchas (unchanged)
 
@@ -50,6 +45,7 @@ e3c2896 fix: recursive nested-type walk for BackgroundService detection
 - **Project-file changes need explicit `reload_workspace`.** Per-call mtime refresh only walks already-known documents. Same for the index — new symbols in new files won't appear until reload.
 - **Stderr capture window** of Claude Code is no longer a problem; use `--log-file <path>`.
 - **`duetGPT.LicenseServer` silent drop** is no longer invisible — check `reload_workspace`'s `Diagnostics` field next time you're in a duetGPT session.
+- **mcpRoslyn doesn't trigger Blazor / Razor source generators.** Any analysis of `.razor.cs` files or types only emitted by the Razor compiler (`App`, generated partial classes) will be incomplete.
 
 ## Useful commands
 
@@ -76,8 +72,9 @@ mcpRoslyn.exe --log-file c:\users\marti\.claude\debug\mcpRoslyn.log
 
 ## Reference
 
-- Architecture summary: [`ARCHITECTURE.md`](ARCHITECTURE.md) (now includes `InvocationIndex` section and 19-tool surface table)
-- Open work: [`TODO.md`](TODO.md)
+- Acceptance report: [`docs/acceptance/2026-05-21-v1.3-acceptance.md`](docs/acceptance/2026-05-21-v1.3-acceptance.md)
+- Architecture summary: [`ARCHITECTURE.md`](ARCHITECTURE.md) (includes `InvocationIndex` section and 19-tool surface table)
+- Open work: [`TODO.md`](TODO.md) — v1.3 items all closed; nice-to-haves remain
 - v1 design + plan + acceptance: `docs/plans/2026-05-15-*.md`, `docs/acceptance/2026-05-15-v1-acceptance.md`
 - v1.1 warm-up: `docs/plans/2026-05-16-warmup-precompilation-{design,implementation}.md`, `docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`
 - v1.2 SymbolIndex: `docs/plans/2026-05-16-attribute-index-{design,implementation}.md`, `docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md`
