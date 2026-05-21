@@ -1,6 +1,6 @@
 # TODO — mcpRoslyn
 
-v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md)). v1.1 warm-up shipped (see [`docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`](docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md)). v1.3 feature-expansion shipped (branch `feat/v1.3-feature-expansion`; 103 tests; awaiting acceptance run).
+v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md)). v1.1 warm-up shipped (see [`docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`](docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md)). v1.3 feature-expansion shipped to main (107 tests). v1.3 acceptance follow-ups: #2/#3/#4 closed; #1 still open.
 
 ## v1.1 follow-ups (from acceptance log)
 

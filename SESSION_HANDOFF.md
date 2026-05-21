@@ -1,43 +1,45 @@
 # Session Handoff
 
-**Last updated:** 2026-05-21 (end of v1.3 acceptance + merge to main)
+**Last updated:** 2026-05-21 (end of v1.3 acceptance follow-up: #2, #3, #4 closed)
 
 ## Where things stand
 
-- **v1.3 IS LIVE ON MAIN.** Merged via `--no-ff` (merge commit `33d8ad4`). Tag not yet cut; do that next session if you want `v1.3.0` to be addressable.
-- Branch `feat/v1.3-feature-expansion` still exists on origin (left for issue-referencing convenience; safe to delete once #1–#4 are closed).
-- Working tree on main is clean.
-- **Tests:** 103 passing (unchanged from end of feature-expansion session — this session was acceptance + merge, no source changes).
+- **v1.3 IS LIVE ON MAIN.** Merge commit `33d8ad4`. Tag not yet cut.
+- Branch `feat/v1.3-feature-expansion` still exists on origin; safe to delete now that #1 is the only open v1.3 follow-up.
+- Working tree on main is clean. Three commits added today on top of the v1.3 merge: `d6b08ba` (paired acceptance symbols), `743d6e7` (find_references dedup + tests), `85a5420` (find_implementations dedup + tests).
+- **Tests:** 107 passing (103 inherited + 4 new contract tests).
 - **Acceptance verdict: PASS-WITH-FOLLOWUPS.** Full report at `docs/acceptance/2026-05-21-v1.3-acceptance.md`.
 
 ## What this session did
 
-1. **Ran the v1.3 acceptance plan against duetGPT** (4 projects, 492 documents). All 7 new tools functional and correct; format-summary and filter-knob smokes both green. Server-internal timings pulled from `mcpRoslyn-v1.3.log` for accuracy (Claude→MCP wall-clock had too much transport overhead to be useful).
-2. **Filled in `docs/acceptance/2026-05-21-v1.3-acceptance.md`** with measurements, spot-check accuracy notes, surfaced issues, and verdict.
-3. **Filed 4 GitHub issues** for the regressions + correctness bug (see "Open follow-ups" below).
-4. **Merged `feat/v1.3-feature-expansion` → `main` with `--no-ff`** and pushed.
+1. **Investigated #3 (`find_implementations` 8.4x regression).** Closed as not-a-bug — methodology error. The v1.2 baseline measured `IBuiltInToolProvider` in-process; the v1.3 acceptance measured `IKnowledgeService` via the Claude Code→exe path on a cold first-call. Apples-to-apples re-measurement on v1.3 head: 288 ms vs v1.2's 321 ms baseline.
+2. **Investigated #2 (`find_references` 2.8x regression).** Closed as not-a-bug — same root cause as #3 (different symbol, different transport). Apples-to-apples: 579 ms vs v1.2's 641 ms baseline.
+3. **Investigated #4 (`find_references` count drift 35 vs 34).** Could not reproduce in-process — both calls return 34 consistently. Found a real correctness gap regardless: neither `find_references` nor `find_implementations` deduplicated location tuples. Shipped defensive dedup + contract tests for both. Closed.
+4. **Posted full investigation comments** on all three issues; closed all three.
 
-## Open follow-ups (filed as GitHub issues)
+## Open follow-ups (GitHub issues)
 
-| # | Title | Type |
+| # | Title | Status |
 |---|---|---|
-| [#1](https://github.com/MBrekhof/mcpRoslyn/issues/1) | InvocationIndex warm-up cost ~30x over predicted budget (~13s vs +400ms) | enhancement |
-| [#2](https://github.com/MBrekhof/mcpRoslyn/issues/2) | `find_references` cold-cache 2.8x regression (641ms → 1803ms) | bug |
-| [#3](https://github.com/MBrekhof/mcpRoslyn/issues/3) | `find_implementations` 8.4x regression (321ms → 2682ms) — **highest priority** | bug |
-| [#4](https://github.com/MBrekhof/mcpRoslyn/issues/4) | `find_references` returns inconsistent counts across calls (35 vs 34, same symbol) | bug |
-
-**Recommended order of attack:** #3 first (biggest absolute hit), then #2 (likely shares a root cause), then #1 (architectural — InvocationIndex laziness), then #4 (a unit test will likely surface the bug fast). All four are tractable; none is catastrophic on the existing code paths.
+| [#1](https://github.com/MBrekhof/mcpRoslyn/issues/1) | InvocationIndex warm-up cost ~30x over predicted budget (~13s vs +400ms) | OPEN — environment-dependent; in-process total warm-up unchanged from v1.2 |
+| [#2](https://github.com/MBrekhof/mcpRoslyn/issues/2) | `find_references` cold-cache 2.8x regression | CLOSED (methodology error) |
+| [#3](https://github.com/MBrekhof/mcpRoslyn/issues/3) | `find_implementations` 8.4x regression | CLOSED (methodology error) |
+| [#4](https://github.com/MBrekhof/mcpRoslyn/issues/4) | `find_references` returns inconsistent counts | CLOSED (defensive dedup shipped) |
 
 ## Two additional observations (not filed — context, not bugs)
 
-- **`find_dead_code_candidates` false-positives on Blazor `.razor.cs` files.** Event handlers and `[Inject]` properties get flagged because mcpRoslyn doesn't see Razor markup. Worth either skipping classes deriving from `Microsoft.AspNetCore.Components.ComponentBase` or down-weighting them. Mention in #1 follow-up planning if you tackle the Blazor source-generator integration later.
-- **Baseline duetGPT carries 622 diagnostics including hard errors** (`CS0234`, `CS0246`, `CS0103`, `CS0115`, `CS0117`, `CS0120`). All trace back to mcpRoslyn not running Blazor source generators, so `App`, `StateHasChanged`, `Pages` namespace, `DbContext.Documents`, and related symbols look missing. **Not a v1.3 regression** — same in v1.2. Long-term fix is deeper MSBuild integration; documented as known limitation.
+- **`find_dead_code_candidates` false-positives on Blazor `.razor.cs` files.** Event handlers and `[Inject]` properties get flagged because mcpRoslyn doesn't see Razor markup. Worth either skipping classes deriving from `Microsoft.AspNetCore.Components.ComponentBase` or down-weighting them.
+- **Baseline duetGPT carries 622 diagnostics including hard errors** (`CS0234`, `CS0246`, `CS0103`, `CS0115`, `CS0117`, `CS0120`). All trace back to mcpRoslyn not running Blazor source generators. **Not a v1.3 regression** — same in v1.2. Long-term fix is deeper MSBuild integration; documented as known limitation.
+
+## Methodology lesson from this session
+
+The v1.3 acceptance compared v1.2 in-process timings against v1.3 published-exe timings AND switched test symbols between the two runs — three confounds at once. Resulted in two false-positive "regressions" (#2 and #3) that took an investigation session to close. **Fix locked in:** `AcceptanceTests.Acceptance_against_duetGPT` now measures both `IBuiltInToolProvider` (v1.2 baseline) and `IKnowledgeService` (v1.3 baseline) back-to-back in-process — so any future acceptance run that wants apples-to-apples timings can read both numbers off the same harness. Always compare like-for-like: same symbol, same transport, same call position in the sequence.
 
 ## What's next when you return
 
-1. **Tag `v1.3.0` on main** if you want it addressable: `git tag -a v1.3.0 33d8ad4 -m "v1.3 — 7 new tools, format-summary, filter knobs" && git push origin v1.3.0`. (Not done by this session — wasn't asked, but it's a one-liner.)
-2. **Pick up issue #3** (`find_implementations` 8.4x regression) — biggest user-visible win.
-3. **Optionally delete** `feat/v1.3-feature-expansion` from origin once issues #1–#4 stop referencing it.
+1. **Tag `v1.3.0` on main** if you want it addressable: `git tag -a v1.3.0 33d8ad4 -m "v1.3 — 7 new tools, format-summary, filter knobs" && git push origin v1.3.0`.
+2. **Pick up issue #1** (InvocationIndex warm-up cost) — only remaining v1.3 follow-up. The 13 s figure is from one published-exe run; in-process total warm-up is unchanged from v1.2 (22.3 s vs 22.8 s), so the cost may be environment-dependent. Worth instrumenting per-project to identify the slow project before architectural changes.
+3. **Optionally delete** `feat/v1.3-feature-expansion` from origin — no open issues reference it anymore.
 
 ## Known limitations / gotchas (unchanged)
 
