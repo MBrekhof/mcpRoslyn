@@ -13,7 +13,7 @@ internal sealed class GetDocumentDiagnosticsTool(IWorkspaceService ws, ILogger<G
     : ToolBase(ws, log)
 {
     [McpServerTool(Name = "get_document_diagnostics")]
-    [Description("Returns Roslyn diagnostics (errors/warnings/info) for one file. Optional severity filter: Error | Warning | Info | Hidden.")]
+    [Description("Returns Roslyn diagnostics for one file. Defaults: minimumSeverity=\"Warning\" (Info/Hidden hidden), includeGenerated=true; pass minimumSeverity=\"All\" to see everything. excludeDiagnosticCodes and excludeDiagnosticSources accept string arrays.")]
     public Task<Contracts.ToolResult<GetDocumentDiagnosticsResult>> InvokeAsync(
         string filePath, string? severity,
         bool includeGenerated = true,

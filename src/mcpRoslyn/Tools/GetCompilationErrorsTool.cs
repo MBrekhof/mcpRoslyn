@@ -13,7 +13,7 @@ internal sealed class GetCompilationErrorsTool(IWorkspaceService ws, ILogger<Get
     : ToolBase(ws, log)
 {
     [McpServerTool(Name = "get_compilation_errors")]
-    [Description("Solution-wide diagnostic list — equivalent to 'would dotnet build succeed?' without invoking MSBuild. Optional severity filter and projectName filter.")]
+    [Description("Solution-wide diagnostic list — equivalent to 'would dotnet build succeed?' without invoking MSBuild. Defaults: minimumSeverity=\"Warning\" (Info/Hidden hidden), includeGenerated=true; pass minimumSeverity=\"All\" to see everything. excludeDiagnosticCodes and excludeDiagnosticSources accept string arrays.")]
     public Task<Contracts.ToolResult<GetCompilationErrorsResult>> InvokeAsync(
         string? severity, string? projectName,
         bool includeGenerated = true,
