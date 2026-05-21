@@ -1,6 +1,6 @@
 # Architecture — mcpRoslyn
 
-Windows-only .NET 10 MCP server exposing 12 Roslyn-backed code-intelligence tools over stdio. Wraps `MSBuildWorkspace` so AI coding agents can run authoritative semantic queries (find-references, goto-definition, find-implementations, semantic-search, rename) instead of text-search heuristics.
+Windows-only .NET 10 MCP server exposing 19 Roslyn-backed code-intelligence tools over stdio. Wraps `MSBuildWorkspace` so AI coding agents can run authoritative semantic queries (find-references, goto-definition, find-implementations, semantic-search, rename) instead of text-search heuristics.
 
 ## Topology
 
@@ -46,7 +46,13 @@ Queries hit the dictionary in O(matches). Always-fresh semantics are preserved v
 
 `SymbolIndex` is reconstructed (dirty set discarded) on `ReloadAsync`. The class is `public sealed` because it's exposed on the public `IWorkspaceService` interface, but consumers should treat it as an implementation detail of `semantic_search`.
 
-## Tool surface (12 tools)
+### InvocationIndex
+
+A sibling `InvocationIndex` (built during warm-up, owned by `WorkspaceService`, exposed via `IWorkspaceService.InvocationIndex`) backs `find_entrypoints` and `find_registrations`. It walks `InvocationExpressionSyntax` in each project's syntax trees, classifying calls into four buckets: routes (`MapGet`/`MapPost`/...), middleware (`Use*` on `IApplicationBuilder`/`WebApplication`), hosted services (`AddHostedService<T>` + `BackgroundService` subclasses), DI registrations (`AddSingleton`/`AddTransient`/`AddScoped` + an `Unclassified[]` bucket for `IServiceCollection` extension calls that don't match the known forms).
+
+Detection is syntactic — agents stay informed of unrecognised DI surface via the `Unclassified[]` array. Lifecycle and dirty-doc handling mirror `SymbolIndex`. Reconstructed on `ReloadAsync`.
+
+## Tool surface (19 tools)
 
 Every tool returns structured JSON wrapped in `ToolResult<T>` (`Result` or `Error`). Locations use 1-based line/column. Symbol identifiers use Roslyn's `DocumentationCommentId` format. Navigation tools accept either `{ filePath, line, column }` or `{ symbolId }`.
 
@@ -54,13 +60,27 @@ Every tool returns structured JSON wrapped in `ToolResult<T>` (`Result` or `Erro
 |---|---|
 | Navigation | `find_references`, `goto_definition`, `workspace_symbol`, `hover` |
 | Structure | `find_implementations`, `find_derived_types`, `list_document_symbols` |
-| Callers | `find_callers` |
+| Callers / Callees | `find_callers`, `find_callees` |
 | Diagnostics | `get_compilation_errors`, `get_document_diagnostics` |
 | Search | `semantic_search` (patterns: `derives-from:`, `implements:`, `has-attribute:`, `returns:`, `parameter-type:`) |
+| Composite | `analyze_symbol` (hover + refs + impls + derived + callers in one call) |
+| Architecture | `project_overview`, `find_entrypoints`, `find_registrations` |
+| Tests | `test_map` (production → test heuristic) |
+| Cleanup | `find_dead_code_candidates` (private/internal members with confidence + denylist) |
 | Editing | `rename_symbol` (preview by default; `applyEdits: true` to write) |
 | Lifecycle | `reload_workspace` |
 
 `rename_symbol` is the **only** path to file writes. Default `applyEdits: false` returns a preview; the caller decides whether to apply.
+
+## Cross-cutting conventions
+
+### `format` parameter
+
+Every tool accepts `format = "structured" | "summary"` (default `structured`). `ToolResult<T>` carries an optional `Summary` field; in summary mode `Result` is null and `Summary` holds a one-line human description. Errors are always structured. Backwards-compatible with v1.2 callers.
+
+### Diagnostics filter knobs
+
+`get_compilation_errors` and `get_document_diagnostics` accept `includeGenerated`, `minimumSeverity` (default `"Warning"`), `excludeDiagnosticCodes`, `excludeDiagnosticSources`. Pure post-filter at collection time, never affects how diagnostics are read from Roslyn.
 
 ## Error handling
 

@@ -11,14 +11,14 @@ public class FindCallersToolTests
     [Test]
     public async Task FindCallers_of_IGreeter_Greet_finds_TestApp_call_site()
     {
-        var sut = await TestHost.CreateAsync<FindCallersTool>();
+        await using var host = await TestHost.CreateAsync<FindCallersTool>();
         var iGreeterPath = Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures", "TestSolution", "TestLib", "IGreeter.cs");
 
         // IGreeter.cs line 5: `    string Greet(string name);`
         // 'G' of Greet after 4 spaces + "string " (7 chars) = column 12 (1-based)
-        var result = await sut.InvokeAsync(iGreeterPath, line: 5, column: 12, symbolId: null, transitive: false, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(iGreeterPath, line: 5, column: 12, symbolId: null, transitive: false, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();
@@ -29,12 +29,12 @@ public class FindCallersToolTests
     [Test]
     public async Task FindCallers_with_stale_symbolId_returns_hint_to_use_workspace_symbol()
     {
-        var sut = await TestHost.CreateAsync<FindCallersTool>();
+        await using var host2 = await TestHost.CreateAsync<FindCallersTool>();
 
-        var result = await sut.InvokeAsync(
+        var result = await host2.Tool.InvokeAsync(
             filePath: null, line: null, column: null,
             symbolId: "M:Bogus.Namespace.MissingMethod(System.String)",
-            transitive: false, CancellationToken.None);
+            transitive: false, ct: CancellationToken.None);
 
         result.Error.Should().NotBeNull();
         result.Error!.Code.Should().Be("SYMBOL_NOT_FOUND");

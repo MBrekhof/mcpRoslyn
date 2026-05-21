@@ -18,7 +18,8 @@ internal sealed class ListDocumentSymbolsTool(IWorkspaceService ws, ILogger<List
     [Description("Returns an outline of one file — top-level types and their members.")]
     public Task<Contracts.ToolResult<ListDocumentSymbolsResult>> InvokeAsync(
         string filePath,
-        CancellationToken ct)
+        string format = "structured",
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
@@ -71,6 +72,9 @@ internal sealed class ListDocumentSymbolsTool(IWorkspaceService ws, ILogger<List
                 }
             }
 
-            return Contracts.ToolResult<ListDocumentSymbolsResult>.Ok(new ListDocumentSymbolsResult(symbols));
+            var result = new ListDocumentSymbolsResult(symbols);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<ListDocumentSymbolsResult>.OkSummary($"{result.Symbols.Count} symbols in document");
+            return Contracts.ToolResult<ListDocumentSymbolsResult>.Ok(result);
         }, ct);
 }

@@ -3,6 +3,8 @@ namespace TestLib;
 public abstract class Shape
 {
     public abstract double Area();
+
+    private int UnusedPrivate() => 42;
 }
 
 public class Circle(double radius) : Shape

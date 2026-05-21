@@ -11,7 +11,7 @@ public class FindReferencesToolTests
     [Test]
     public async Task FindReferences_IGreeter_finds_three_or_more()
     {
-        var sut = await TestHost.CreateAsync<FindReferencesTool>();
+        await using var host = await TestHost.CreateAsync<FindReferencesTool>();
         var iGreeterPath = Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures", "TestSolution", "TestLib", "IGreeter.cs");
@@ -22,7 +22,7 @@ public class FindReferencesToolTests
         //   2: (blank)
         //   3: public interface IGreeter
         // "public interface " is 17 chars, so `I` of IGreeter is at column 18.
-        var result = await sut.InvokeAsync(iGreeterPath, line: 3, column: 18, symbolId: null, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(iGreeterPath, line: 3, column: 18, symbolId: null, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

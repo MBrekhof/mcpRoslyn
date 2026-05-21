@@ -26,7 +26,7 @@ public class WorkspaceServiceTests
 
         await sut.LoadAsync();
 
-        sut.LoadedProjectCount.Should().Be(2);
+        sut.LoadedProjectCount.Should().Be(4);
     }
 
     [Test]

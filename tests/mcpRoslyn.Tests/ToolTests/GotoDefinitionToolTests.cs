@@ -11,7 +11,7 @@ public class GotoDefinitionToolTests
     [Test]
     public async Task GotoDefinition_finds_IGreeter_from_EnglishGreeter_base_list()
     {
-        var sut = await TestHost.CreateAsync<GotoDefinitionTool>();
+        await using var host = await TestHost.CreateAsync<GotoDefinitionTool>();
 
         var englishGreeterPath = Path.Combine(
             AppContext.BaseDirectory,
@@ -19,7 +19,7 @@ public class GotoDefinitionToolTests
 
         // Line 3 (1-based): `public class EnglishGreeter : IGreeter`
         // 'I' of IGreeter is at column 31 (1-based, spaces only — no tabs).
-        var result = await sut.InvokeAsync(englishGreeterPath, line: 3, column: 31, CancellationToken.None);
+        var result = await host.Tool.InvokeAsync(englishGreeterPath, line: 3, column: 31, ct: CancellationToken.None);
 
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();

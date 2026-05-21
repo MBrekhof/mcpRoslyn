@@ -30,4 +30,11 @@ public interface IWorkspaceService
     /// Throws InvalidOperationException if accessed before LoadAsync completes.
     /// </summary>
     SymbolIndex SymbolIndex { get; }
+
+    /// <summary>
+    /// Index of ASP.NET routes, middleware, hosted services, and DI registrations
+    /// detected by walking syntax trees during warm-up. Same lifecycle as SymbolIndex.
+    /// Throws InvalidOperationException if accessed before LoadAsync completes.
+    /// </summary>
+    InvocationIndex InvocationIndex { get; }
 }

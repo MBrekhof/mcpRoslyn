@@ -19,6 +19,7 @@ internal sealed class FindCallersTool(IWorkspaceService ws, ILogger<FindCallersT
     public Task<Contracts.ToolResult<FindCallersResult>> InvokeAsync(
         string? filePath, int? line, int? column, string? symbolId,
         bool transitive = false,
+        string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
@@ -61,7 +62,10 @@ internal sealed class FindCallersTool(IWorkspaceService ws, ILogger<FindCallersT
 
             await FindCallersRecursiveAsync(symbol, solution, transitive, entries, seen, ct2);
 
-            return Contracts.ToolResult<FindCallersResult>.Ok(new FindCallersResult(entries));
+            var result = new FindCallersResult(entries);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<FindCallersResult>.OkSummary($"{result.Callers.Count} caller sites");
+            return Contracts.ToolResult<FindCallersResult>.Ok(result);
         }, ct);
 
     private static async Task FindCallersRecursiveAsync(

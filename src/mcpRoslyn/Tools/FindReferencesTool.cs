@@ -20,7 +20,8 @@ internal sealed class FindReferencesTool(IWorkspaceService ws, ILogger<FindRefer
                  "Pass either (filePath, line, column) OR symbolId.")]
     public Task<Contracts.ToolResult<FindReferencesResult>> InvokeAsync(
         string? filePath, int? line, int? column, string? symbolId,
-        CancellationToken ct)
+        string format = "structured",
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
@@ -61,7 +62,10 @@ internal sealed class FindReferencesTool(IWorkspaceService ws, ILogger<FindRefer
                 }
             }
 
-            return Contracts.ToolResult<FindReferencesResult>.Ok(
-                new FindReferencesResult(RoslynHelpers.ToSymbolInfo(symbol), locations));
+            var result = new FindReferencesResult(RoslynHelpers.ToSymbolInfo(symbol), locations);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<FindReferencesResult>.OkSummary(
+                    $"{result.References.Count} references in {result.References.Select(r => r.FilePath).Distinct().Count()} files");
+            return Contracts.ToolResult<FindReferencesResult>.Ok(result);
         }, ct);
 }

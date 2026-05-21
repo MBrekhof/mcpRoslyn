@@ -28,6 +28,7 @@ internal sealed class RenameSymbolTool(IWorkspaceService ws, ILogger<RenameSymbo
         string filePath, int line, int column,
         string newName,
         bool applyEdits = false,
+        string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
@@ -90,6 +91,12 @@ internal sealed class RenameSymbolTool(IWorkspaceService ws, ILogger<RenameSymbo
                 }
             }
 
-            return Contracts.ToolResult<RenameSymbolResult>.Ok(new RenameSymbolResult(edits, Conflicts: null));
+            var result = new RenameSymbolResult(edits, Conflicts: null);
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+            {
+                var desc = applyEdits ? $"renamed {result.Edits.Count} occurrences" : $"preview: {result.Edits.Count} occurrences";
+                return Contracts.ToolResult<RenameSymbolResult>.OkSummary(desc);
+            }
+            return Contracts.ToolResult<RenameSymbolResult>.Ok(result);
         }, ct);
 }

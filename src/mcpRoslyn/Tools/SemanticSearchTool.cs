@@ -20,7 +20,8 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
                  "parameter-type:Namespace.Type. Type can also be a primitive alias like 'int' or 'string'.")]
     public Task<Contracts.ToolResult<SemanticSearchResult>> InvokeAsync(
         string pattern,
-        CancellationToken ct)
+        string format = "structured",
+        CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
             var colonIdx = pattern.IndexOf(':');
@@ -32,6 +33,7 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
             var target = pattern[(colonIdx + 1)..];
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
 
+            SemanticSearchResult? result = null;
             switch (kind)
             {
                 case "derives-from":
@@ -44,7 +46,8 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
                     var matches = new List<Contracts.SymbolInfo>();
                     var dedup = new HashSet<string>();
                     foreach (var d in derived) AddIfNew(matches, dedup, d);
-                    return Contracts.ToolResult<SemanticSearchResult>.Ok(new SemanticSearchResult(matches));
+                    result = new SemanticSearchResult(matches);
+                    break;
                 }
                 case "implements":
                 {
@@ -56,21 +59,26 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
                     var matches = new List<Contracts.SymbolInfo>();
                     var dedup = new HashSet<string>();
                     foreach (var i in impls) AddIfNew(matches, dedup, i);
-                    return Contracts.ToolResult<SemanticSearchResult>.Ok(new SemanticSearchResult(matches));
+                    result = new SemanticSearchResult(matches);
+                    break;
                 }
                 case "has-attribute":
-                    return Contracts.ToolResult<SemanticSearchResult>.Ok(
-                        new SemanticSearchResult(Workspace.SymbolIndex.QueryAttribute(target, solution, ct2)));
+                    result = new SemanticSearchResult(Workspace.SymbolIndex.QueryAttribute(target, solution, ct2));
+                    break;
                 case "returns":
-                    return Contracts.ToolResult<SemanticSearchResult>.Ok(
-                        new SemanticSearchResult(Workspace.SymbolIndex.QueryReturnType(target, solution, ct2)));
+                    result = new SemanticSearchResult(Workspace.SymbolIndex.QueryReturnType(target, solution, ct2));
+                    break;
                 case "parameter-type":
-                    return Contracts.ToolResult<SemanticSearchResult>.Ok(
-                        new SemanticSearchResult(Workspace.SymbolIndex.QueryParameterType(target, solution, ct2)));
+                    result = new SemanticSearchResult(Workspace.SymbolIndex.QueryParameterType(target, solution, ct2));
+                    break;
                 default:
                     return Contracts.ToolResult<SemanticSearchResult>.Fail(
                         "INVALID_PATTERN", $"Unknown pattern kind: {kind}");
             }
+
+            if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
+                return Contracts.ToolResult<SemanticSearchResult>.OkSummary($"{result.Matches.Count} matches");
+            return Contracts.ToolResult<SemanticSearchResult>.Ok(result);
         }, ct);
 
     private static void AddIfNew(List<Contracts.SymbolInfo> matches, HashSet<string> dedup, ISymbol sym)

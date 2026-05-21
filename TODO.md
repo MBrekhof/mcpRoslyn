@@ -1,6 +1,6 @@
 # TODO — mcpRoslyn
 
-v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md)). v1.1 warm-up shipped (see [`docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`](docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md)).
+v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md)). v1.1 warm-up shipped (see [`docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`](docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md)). v1.3 feature-expansion shipped (branch `feat/v1.3-feature-expansion`; 103 tests; awaiting acceptance run).
 
 ## v1.1 follow-ups (from acceptance log)
 
@@ -25,6 +25,28 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
 - [ ] **Fix the `Workspace.WorkspaceFailed` obsolete warning.** Roslyn 5.3 deprecates the event in favor of `RegisterWorkspaceFailedHandler`. CS0618 has been accepted since v1; a small migration would clean it up.
 - [ ] **Investigate `duetGPT.LicenseServer` silent drop.** v2.0 of duetGPT's .sln declares 5 projects; MSBuildWorkspace consistently loads 4. `duetGPT.LicenseServer` is filtered out *before* MSBuild raises a `WorkspaceFailed` event, so the v1.1 diagnostics-surfacing work (`WorkspaceLoadDiagnostic`) doesn't catch it — verified in v1.2 acceptance ([`docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md`](docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md)). Likely an SDK / target-framework / project-type filter applied at workspace open. Start by inspecting that project's .csproj for `<Sdk>` reference / target framework / project type GUID, then check Roslyn's `MSBuildWorkspace.OpenSolutionAsync` source for what it skips silently. May need a separate `list_solution_projects` tool that reads the .sln/.slnx directly to surface declared-but-unloaded entries.
 - [x] ~~**Re-measure `find_implementations` on duetGPT.**~~ Resolved in v1.2 acceptance ([`docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md`](docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md)): 321 ms in v1.2, matches v1 (~300 ms). v1.1's 832 ms was sampling noise.
+
+## v1.3 items (all closed)
+
+- [x] ~~**`project_overview` tool.**~~ Shipped (`21626c1`/`081c45c`). Solution structure: projects, package refs, project refs. `TargetFramework` is always null (see nice-to-haves below).
+- [x] ~~**`find_entrypoints` tool.**~~ Shipped (`bf7d887`). ASP.NET routes / middleware / hosted services via `InvocationIndex`.
+- [x] ~~**`find_registrations` tool.**~~ Shipped (`f85bd95`). DI registrations + likely consumers via `InvocationIndex`.
+- [x] ~~**`find_callees` tool.**~~ Shipped (`7d8821d`). Outgoing call detection, mirror of `find_callers`.
+- [x] ~~**`analyze_symbol` composite tool.**~~ Shipped (`8feae51`). Hover + refs + impls + derived + callers in one call.
+- [x] ~~**`test_map` tool.**~~ Shipped (`d91f4dc`). Production → test heuristic.
+- [x] ~~**`find_dead_code_candidates` tool.**~~ Shipped (`d146f6f`). Private/internal members with confidence scoring + denylist + `InternalsVisibleTo` handling.
+- [x] ~~**`format` parameter on all tools.**~~ Shipped (`bf8f727`). `structured` (default) | `summary`. `ToolResult<T>` carries optional `Summary` field. Backwards-compatible.
+- [x] ~~**Diagnostics filter knobs.**~~ Shipped (`caa0679`/`6ce66a0`). `includeGenerated`, `minimumSeverity`, `excludeDiagnosticCodes`, `excludeDiagnosticSources` on `get_compilation_errors` and `get_document_diagnostics`.
+
+## Nice-to-haves spotted during v1.3
+
+- [ ] **`SymbolIndex.AllSymbols()` not in dirty-walk.** Could return stale data after edits. Low-impact for `find_dead_code_candidates` (run-occasionally tool); revisit if observed.
+- [ ] **`find_dead_code_candidates` `Skipped` counters truncate when `maxResults` hits.** Minor stats inaccuracy when the result set is large; document or fix in v1.4.
+- [ ] **`find_registrations` consumer detection over-broad.** Currently returns any method with the parameter type; tighten to `MethodKind == Constructor` for higher signal in v1.4.
+- [ ] **`project_overview.TargetFramework` is always `null`.**~~ Add .csproj XML parsing in v1.4.
+- [ ] **`find_entrypoints` hosted-service de-dup pivot.** Tool layer collapses "registered" + "subclass" entries for the same type. If duetGPT acceptance shows agents want both visible, expose a flag.
+- [ ] **`HoverToolTests.cs` line 19 stale comment.** Comment references `EnglishGreeter.Greet` body that was changed in Task 6. Trivial cleanup.
+- [ ] **Strengthen `find_dead_code_candidates` test 3.** `Skipped_counters_report_publicMembers_and_tests` is currently a trivial null check — replace with a real count assertion in v1.4.
 
 ## Real-session validation (still to do)
 
