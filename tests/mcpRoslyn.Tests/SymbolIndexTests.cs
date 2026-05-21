@@ -128,7 +128,12 @@ public class SymbolIndexTests
 
         try
         {
-            var mutated = backup.Replace("[MyMarker]\npublic class MarkedType", "public class MarkedType");
+            // Tolerate either CRLF or LF between the attribute and the class declaration —
+            // core.autocrlf can flip the fixture's checked-out line endings between
+            // branch switches, so searching only "[MyMarker]\n..." is fragile on Windows.
+            var mutated = backup
+                .Replace("[MyMarker]\r\npublic class MarkedType", "public class MarkedType")
+                .Replace("[MyMarker]\npublic class MarkedType", "public class MarkedType");
             File.WriteAllText(doc.FilePath!, mutated);
             File.SetLastWriteTimeUtc(doc.FilePath!, DateTime.UtcNow.AddSeconds(1));
 
