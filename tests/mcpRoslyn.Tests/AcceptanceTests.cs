@@ -88,6 +88,25 @@ public class AcceptanceTests
         TestContext.WriteLine($"find_implementations(IBuiltInToolProvider): {implsSw.ElapsedMilliseconds} ms, " +
             $"error={implsResult.Error?.Code ?? "null"}, count={implsResult.Result?.Implementations.Count ?? 0}");
 
+        // 2b) Same query on a second interface — measures cache-warm cost after (2). Pair locked in
+        //     so future runs can't mistake "first impl call after warm-up" timing for a regression.
+        var implsSw2 = Stopwatch.StartNew();
+        var implsResult2 = await findImpls.InvokeAsync(filePath: null, line: null, column: null,
+            symbolId: "T:duetGPT.Services.IKnowledgeService",
+            ct: CancellationToken.None);
+        implsSw2.Stop();
+        TestContext.WriteLine($"find_implementations(IKnowledgeService): {implsSw2.ElapsedMilliseconds} ms, " +
+            $"error={implsResult2.Error?.Code ?? "null"}, count={implsResult2.Result?.Implementations.Count ?? 0}");
+
+        // 2c) Second find_references symbol — cache-warm timing for the same reason as (2b).
+        var refsSw2 = Stopwatch.StartNew();
+        var refsResult2 = await findRefs.InvokeAsync(filePath: null, line: null, column: null,
+            symbolId: "T:duetGPT.Services.IKnowledgeService",
+            ct: CancellationToken.None);
+        refsSw2.Stop();
+        TestContext.WriteLine($"find_references(IKnowledgeService): {refsSw2.ElapsedMilliseconds} ms, " +
+            $"error={refsResult2.Error?.Code ?? "null"}, count={refsResult2.Result?.References.Count ?? 0}");
+
         // 3) find_callers on KnowledgeService.ExpandQueryAsync
         var findCallers = await CreateAsync<FindCallersTool>(workspace);
         var callersSw = Stopwatch.StartNew();
