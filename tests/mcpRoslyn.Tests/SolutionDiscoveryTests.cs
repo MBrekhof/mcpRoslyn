@@ -1,4 +1,5 @@
 using FluentAssertions;
+using mcpRoslyn.Workspace;
 using NUnit.Framework;
 
 namespace mcpRoslyn.Tests;
@@ -6,103 +7,110 @@ namespace mcpRoslyn.Tests;
 [TestFixture]
 public class SolutionDiscoveryTests
 {
-    [Test]
-    public void FindFirstSolutionUpward_finds_sln_in_exact_directory()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"mcpRoslyn-disc-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
-        var fakeSln = Path.Combine(tempDir, "Test.sln");
-        File.WriteAllText(fakeSln, "Microsoft Visual Studio Solution File, Format Version 12.00");
+    private string _root = null!;
 
-        try
-        {
-            var found = FindFirstSolutionUpward(new DirectoryInfo(tempDir));
-            found.Should().Be(fakeSln);
-        }
-        finally
-        {
-            Directory.Delete(tempDir, recursive: true);
-        }
+    [SetUp]
+    public void SetUp()
+    {
+        _root = Path.Combine(Path.GetTempPath(), $"mcpRoslyn-disc-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_root);
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        if (Directory.Exists(_root))
+            Directory.Delete(_root, recursive: true);
+    }
+
+    private string CreateSolution(string relativePath)
+    {
+        var full = Path.Combine(_root, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        var content = full.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
+            ? "<Solution />"
+            : "Microsoft Visual Studio Solution File, Format Version 12.00";
+        File.WriteAllText(full, content);
+        return full;
+    }
+
+    // ---- Upward search (existing behavior must be preserved) ----
+
+    [Test]
+    public void Discover_finds_sln_in_exact_directory()
+    {
+        var sln = CreateSolution("Test.sln");
+
+        SolutionDiscovery.Discover(_root).Should().Be(sln);
     }
 
     [Test]
-    public void FindFirstSolutionUpward_finds_sln_in_parent_directory()
+    public void Discover_finds_sln_in_parent_directory()
     {
-        var tempRoot = Path.Combine(Path.GetTempPath(), $"mcpRoslyn-disc-{Guid.NewGuid():N}");
-        var childDir = Path.Combine(tempRoot, "src", "MyProject");
-        Directory.CreateDirectory(childDir);
-        var fakeSln = Path.Combine(tempRoot, "MyRepo.sln");
-        File.WriteAllText(fakeSln, "Microsoft Visual Studio Solution File, Format Version 12.00");
+        var sln = CreateSolution("MyRepo.sln");
+        var child = Path.Combine(_root, "src", "MyProject");
+        Directory.CreateDirectory(child);
 
-        try
-        {
-            var found = FindFirstSolutionUpward(new DirectoryInfo(childDir));
-            found.Should().Be(fakeSln);
-        }
-        finally
-        {
-            Directory.Delete(tempRoot, recursive: true);
-        }
+        SolutionDiscovery.Discover(child).Should().Be(sln);
     }
 
     [Test]
-    public void FindFirstSolutionUpward_prefers_sln_over_slnx_in_same_directory()
+    public void Discover_prefers_sln_over_slnx_in_same_directory()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"mcpRoslyn-disc-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
-        var fakeSln = Path.Combine(tempDir, "Test.sln");
-        var fakeSlnx = Path.Combine(tempDir, "Test.slnx");
-        File.WriteAllText(fakeSln, "Microsoft Visual Studio Solution File, Format Version 12.00");
-        File.WriteAllText(fakeSlnx, "<Solution />");
+        var sln = CreateSolution("Test.sln");
+        CreateSolution("Test.slnx");
 
-        try
-        {
-            var found = FindFirstSolutionUpward(new DirectoryInfo(tempDir));
-            found.Should().Be(fakeSln);
-        }
-        finally
-        {
-            Directory.Delete(tempDir, recursive: true);
-        }
+        SolutionDiscovery.Discover(_root).Should().Be(sln);
+    }
+
+    // ---- Downward search (new behavior) ----
+
+    [Test]
+    public void Discover_finds_sln_in_subdirectory_when_none_upward()
+    {
+        // Mirrors the real failure: solution lives in ./src, below the working directory.
+        var sln = CreateSolution(Path.Combine("src", "MyApp.sln"));
+
+        SolutionDiscovery.Discover(_root).Should().Be(sln);
     }
 
     [Test]
-    public void FindFirstSolutionUpward_returns_null_when_no_solution_exists()
+    public void Discover_prefers_shallowest_solution_when_searching_downward()
     {
-        // Use a temp dir with no .sln/.slnx and stop before hitting any real solution above
-        var tempDir = Path.Combine(Path.GetTempPath(), $"mcpRoslyn-disc-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        CreateSolution(Path.Combine("a", "deep", "Deep.sln"));
+        var shallow = CreateSolution(Path.Combine("b", "Shallow.sln"));
 
-        try
-        {
-            // We can't guarantee temp path has no .sln above it, so just verify the helper
-            // returns something non-null when there IS a file (already covered above).
-            // For the null case, test directly with an isolated DirectoryInfo that has no parent.
-            // We verify the logic: an empty directory returns null from the helper.
-            var emptyResult = new DirectoryInfo(tempDir)
-                .GetFiles("*.sln")
-                .Concat(new DirectoryInfo(tempDir).GetFiles("*.slnx"))
-                .ToList();
-            emptyResult.Should().BeEmpty();
-        }
-        finally
-        {
-            Directory.Delete(tempDir, recursive: true);
-        }
+        SolutionDiscovery.Discover(_root).Should().Be(shallow);
     }
 
-    private static string? FindFirstSolutionUpward(DirectoryInfo? dir)
+    [Test]
+    public void Discover_ignores_bin_and_obj_directories_when_searching_downward()
     {
-        while (dir is not null)
-        {
-            var solutions = dir.GetFiles("*.sln")
-                .Concat(dir.GetFiles("*.slnx"))
-                .OrderBy(f => f.Extension, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            if (solutions.Count > 0) return solutions[0].FullName;
-            dir = dir.Parent;
-        }
-        return null;
+        // 'bin' sorts before 'src'; without exclusion BFS would return the bin copy.
+        CreateSolution(Path.Combine("bin", "Generated.sln"));
+        var real = CreateSolution(Path.Combine("src", "Real.sln"));
+
+        SolutionDiscovery.Discover(_root).Should().Be(real);
+    }
+
+    [Test]
+    public void Discover_prefers_enclosing_solution_over_nested_one()
+    {
+        // Working dir is ./src (no solution); an enclosing solution and a nested
+        // solution both exist. The enclosing (upward) one wins.
+        var enclosing = CreateSolution("Enclosing.sln");
+        CreateSolution(Path.Combine("src", "proj", "Nested.sln"));
+        var start = Path.Combine(_root, "src");
+        Directory.CreateDirectory(start);
+
+        SolutionDiscovery.Discover(start).Should().Be(enclosing);
+    }
+
+    [Test]
+    public void Discover_returns_null_when_no_solution_exists_in_tree()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "src", "empty"));
+
+        SolutionDiscovery.Discover(_root).Should().BeNull();
     }
 }

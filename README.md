@@ -47,7 +47,7 @@ Register once:
 }
 ```
 
-mcpRoslyn discovers the solution by walking up from Claude Code's CWD looking for `*.sln` or `*.slnx`. The first one found is loaded.
+mcpRoslyn discovers the solution by first walking **up** from Claude Code's CWD looking for `*.sln` or `*.slnx` (the closest enclosing solution wins). If none is found up the tree, it then searches **down** (breadth-first, skipping `bin`/`obj`/`node_modules`/`packages` and dot-directories) so a solution nested in a subfolder like `src/` is still found — the shallowest match wins. The first one found is loaded.
 
 ### Per-project (`.mcp.json` in the project root) — pin to one solution
 
@@ -68,7 +68,7 @@ Useful when a project contains multiple `.sln` files and you want to force a spe
 
 | Flag | Required | Description |
 |---|---|---|
-| `--solution <path>` | No | Path to a `.sln` or `.slnx`. When omitted, mcpRoslyn walks up from CWD looking for one. |
+| `--solution <path>` | No | Path to a `.sln` or `.slnx`. When omitted, mcpRoslyn walks up from CWD, then searches down into subfolders, looking for one. |
 | `--log-level <level>` | No | `Debug`, `Information` (default), `Warning`, `Error`. |
 | `--log-file <path>` | No | Tee `ILogger` output to a file (append mode). Useful because Claude Code only surfaces MCP stderr during the `initialize` handler — anything after that (warm-up timings, per-tool diagnostics) is otherwise lost. |
 
