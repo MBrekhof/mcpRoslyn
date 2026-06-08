@@ -1,16 +1,26 @@
 # Session Handoff
 
-**Last updated:** 2026-05-21 (end of v1.3 acceptance follow-up: #2, #3, #4 closed)
+**Last updated:** 2026-06-08 (downward solution discovery merged + pushed; v1.3.0 tagged; exe republished)
 
 ## Where things stand
 
-- **v1.3 IS LIVE ON MAIN.** Merge commit `33d8ad4`. Tag not yet cut.
+- **v1.3 IS LIVE ON MAIN and TAGGED.** `v1.3.0` annotated tag now points at merge commit `33d8ad4` and is pushed to origin. Post-v1.3.0 patches (dedup fixes, downward discovery) sit on top of the tag.
+- **`main` HEAD is `07eebad`** (downward solution discovery) — merged from `fix/downward-solution-discovery`, pushed to origin. That branch is deleted.
+- **Published exe is current.** `bin/publish/mcpRoslyn.exe` was rebuilt 2026-06-08 and now carries the up-then-down solution discovery. Picked up on next Claude Code session spawn.
 - Branch `feat/v1.3-feature-expansion` still exists on origin; safe to delete now that #1 is the only open v1.3 follow-up.
-- Working tree on main is clean. Three commits added today on top of the v1.3 merge: `d6b08ba` (paired acceptance symbols), `743d6e7` (find_references dedup + tests), `85a5420` (find_implementations dedup + tests).
-- **Tests:** 107 passing (103 inherited + 4 new contract tests).
+- Working tree on main is clean.
+- **Tests:** 111 passing (107 inherited + 4 new `SolutionDiscoveryTests` for downward search). 1 acceptance test skipped by design.
 - **Acceptance verdict: PASS-WITH-FOLLOWUPS.** Full report at `docs/acceptance/2026-05-21-v1.3-acceptance.md`.
 
-## What this session did
+## What the 2026-06-08 session did
+
+1. **Merged `fix/downward-solution-discovery` into `main`** (fast-forward to `07eebad`). The change extracts the inline `DiscoverSolution` from `Program.cs` into a testable `SolutionDiscovery` class and adds breadth-first **downward** search (skips `bin`/`obj`/`node_modules`/`packages` + dot-dirs, ignores symlinks/junctions, depth cap 8) for when no `.sln`/`.slnx` is found walking up. 4 new `SolutionDiscoveryTests`.
+2. **Verified 111 tests pass** on the merged commit, then deleted the merged branch.
+3. **Pushed `main` to origin.** Required switching the active `gh` account from `MartinWLN` (no push access → 403) to `MBrekhof`. `MBrekhof` is now the active account.
+4. **Cut and pushed `v1.3.0`** annotated tag at `33d8ad4`.
+5. **Republished `bin/publish/mcpRoslyn.exe`** (stopped 2 running instances first to free the file lock).
+
+## What the 2026-05-21 session did
 
 1. **Investigated #3 (`find_implementations` 8.4x regression).** Closed as not-a-bug — methodology error. The v1.2 baseline measured `IBuiltInToolProvider` in-process; the v1.3 acceptance measured `IKnowledgeService` via the Claude Code→exe path on a cold first-call. Apples-to-apples re-measurement on v1.3 head: 288 ms vs v1.2's 321 ms baseline.
 2. **Investigated #2 (`find_references` 2.8x regression).** Closed as not-a-bug — same root cause as #3 (different symbol, different transport). Apples-to-apples: 579 ms vs v1.2's 641 ms baseline.
@@ -37,9 +47,9 @@ The v1.3 acceptance compared v1.2 in-process timings against v1.3 published-exe 
 
 ## What's next when you return
 
-1. **Tag `v1.3.0` on main** if you want it addressable: `git tag -a v1.3.0 33d8ad4 -m "v1.3 — 7 new tools, format-summary, filter knobs" && git push origin v1.3.0`.
-2. **Pick up issue #1** (InvocationIndex warm-up cost) — only remaining v1.3 follow-up. The 13 s figure is from one published-exe run; in-process total warm-up is unchanged from v1.2 (22.3 s vs 22.8 s), so the cost may be environment-dependent. Worth instrumenting per-project to identify the slow project before architectural changes.
-3. **Optionally delete** `feat/v1.3-feature-expansion` from origin — no open issues reference it anymore.
+1. **Pick up issue #1** (InvocationIndex warm-up cost) — only remaining v1.3 follow-up. The 13 s figure is from one published-exe run; in-process total warm-up is unchanged from v1.2 (22.3 s vs 22.8 s), so the cost may be environment-dependent. Worth instrumenting per-project to identify the slow project before architectural changes.
+2. **Optionally delete** `feat/v1.3-feature-expansion` from origin — no open issues reference it anymore.
+3. **`gh` account gotcha:** active account is now `MBrekhof` (has push access to this repo). If a push 403s, run `gh auth switch --user MBrekhof` — `MartinWLN` can't push here.
 
 ## Known limitations / gotchas (unchanged)
 
