@@ -1,16 +1,33 @@
 # Session Handoff
 
-**Last updated:** 2026-06-08 (downward solution discovery merged + pushed; v1.3.0 tagged; exe republished)
+**Last updated:** 2026-06-15 (issue #1 InvocationIndex warm-up perf fix committed + pushed)
 
 ## Where things stand
 
-- **v1.3 IS LIVE ON MAIN and TAGGED.** `v1.3.0` annotated tag now points at merge commit `33d8ad4` and is pushed to origin. Post-v1.3.0 patches (dedup fixes, downward discovery) sit on top of the tag.
-- **`main` HEAD is `07eebad`** (downward solution discovery) — merged from `fix/downward-solution-discovery`, pushed to origin. That branch is deleted.
-- **Published exe is current.** `bin/publish/mcpRoslyn.exe` was rebuilt 2026-06-08 and now carries the up-then-down solution discovery. Picked up on next Claude Code session spawn.
-- Branch `feat/v1.3-feature-expansion` still exists on origin; safe to delete now that #1 is the only open v1.3 follow-up.
+- **`main` HEAD is `3313efc`** (InvocationIndex DI-verb gate, issue #1) — committed and pushed to origin.
+- **v1.3 IS LIVE ON MAIN and TAGGED.** `v1.3.0` annotated tag points at merge commit `33d8ad4`. Post-tag patches (dedup fixes, downward discovery, the #1 perf fix) sit on top of the tag.
+- **Published exe is STALE re: the #1 fix.** `bin/publish/mcpRoslyn.exe` was last rebuilt 2026-06-08 (carries downward discovery, NOT the #1 perf fix). **Republish needed** for live sessions to pick up the faster warm-up: `dotnet publish src/mcpRoslyn -c Release -o bin/publish` (stop running mcpRoslyn.exe instances first — they hold the file lock).
+- Branch `feat/v1.3-feature-expansion` still exists on origin; safe to delete (no open issue references it).
 - Working tree on main is clean.
-- **Tests:** 111 passing (107 inherited + 4 new `SolutionDiscoveryTests` for downward search). 1 acceptance test skipped by design.
+- **Tests:** 111 passing. 1 acceptance test `[Explicit]` (not run by default).
 - **Acceptance verdict: PASS-WITH-FOLLOWUPS.** Full report at `docs/acceptance/2026-05-21-v1.3-acceptance.md`.
+
+## What the 2026-06-15 session did (issue #1)
+
+**Fixed the InvocationIndex warm-up cost** (commit `3313efc`). Root-caused with measurement, not inference:
+
+- `InvocationIndex.IndexDocument`'s cascade ended in an **ungated** `else if (IsServiceCollectionCall(...))`, which runs `GetSymbolInfo(inv)` (full overload-resolution bind) on every invocation that missed the cheap name checks. On duetGPT: **99,734 of 101,743 invocations (98%)** hit that bind — purely to find the few unrecognized `IServiceCollection` extension calls for the `Unclassified` bucket. `WalkTypes(GlobalNamespace)` was a red herring (133 ms).
+- **Fix:** gate the bind behind a cheap syntactic `LooksLikeDiVerb()` check (`Add*`/`TryAdd*`/`Configure*`/`PostConfigure*`/`Replace`/`Decorate`). Candidate binds drop **99,734 → 1,440**.
+- **Verified, drift-cancelled interleaved cold measurement:** bind work fell from ~8–11s to **~1.45s (~6–7×)**. Residual ~1.45s is intrinsic — those 1,440 generic DI calls (`AddDbContext<T>`, DevExpress/EF) are genuinely expensive to bind.
+- **Tried and reverted:** a receiver-type fast-path (`GetTypeInfo` on the receiver before `GetSymbolInfo`). Interleaved testing showed no measurable gain → reverted to keep the diff minimal.
+- **Behavior preserved:** `FindRegistrationsToolTests` 5/5 — `AddCustomThing` → `Unclassified` still holds (existing test is the regression guard).
+- **Methodology note:** raw single cold-process warm-up readings swung 5.5s↔8.8s with SymbolIndex also moving 2× on *no* code change. The machine is noisy — only the interleaved in-process A/B comparisons were trusted. Same lesson as the v1.3 acceptance: compare like-for-like, never trust a single cold run.
+
+## Open follow-ups for #1
+
+- **Republish the exe** (see above) so live sessions get the faster warm-up.
+- **Comment/close issue #1** referencing commit `3313efc`. Not yet done this session.
+- **SymbolIndex's separate 6–10s warm-up is out of scope for #1** — different mechanism (walks all declared symbols + `ToSymbolInfo`/`GetAttributes`, no per-invocation binding). Worth its own issue if warm-up is still the dominant first-call latency after the exe republish.
 
 ## What the 2026-06-08 session did
 
@@ -31,7 +48,7 @@
 
 | # | Title | Status |
 |---|---|---|
-| [#1](https://github.com/MBrekhof/mcpRoslyn/issues/1) | InvocationIndex warm-up cost ~30x over predicted budget (~13s vs +400ms) | OPEN — environment-dependent; in-process total warm-up unchanged from v1.2 |
+| [#1](https://github.com/MBrekhof/mcpRoslyn/issues/1) | InvocationIndex warm-up cost ~30x over predicted budget (~13s vs +400ms) | FIX COMMITTED (`3313efc`) — DI-verb gate cut bind work ~6–7× (~8–11s → ~1.45s). Pending: exe republish + issue close |
 | [#2](https://github.com/MBrekhof/mcpRoslyn/issues/2) | `find_references` cold-cache 2.8x regression | CLOSED (methodology error) |
 | [#3](https://github.com/MBrekhof/mcpRoslyn/issues/3) | `find_implementations` 8.4x regression | CLOSED (methodology error) |
 | [#4](https://github.com/MBrekhof/mcpRoslyn/issues/4) | `find_references` returns inconsistent counts | CLOSED (defensive dedup shipped) |
@@ -47,9 +64,10 @@ The v1.3 acceptance compared v1.2 in-process timings against v1.3 published-exe 
 
 ## What's next when you return
 
-1. **Pick up issue #1** (InvocationIndex warm-up cost) — only remaining v1.3 follow-up. The 13 s figure is from one published-exe run; in-process total warm-up is unchanged from v1.2 (22.3 s vs 22.8 s), so the cost may be environment-dependent. Worth instrumenting per-project to identify the slow project before architectural changes.
-2. **Optionally delete** `feat/v1.3-feature-expansion` from origin — no open issues reference it anymore.
-3. **`gh` account gotcha:** active account is now `MBrekhof` (has push access to this repo). If a push 403s, run `gh auth switch --user MBrekhof` — `MartinWLN` can't push here.
+1. **Finish closing out #1:** republish the exe (`dotnet publish src/mcpRoslyn -c Release -o bin/publish`, stop running instances first) and comment/close issue #1 referencing `3313efc`. Then re-check warm-up against duetGPT with `--log-file` to confirm the live `Invocation index built in X ms` line dropped.
+2. **Consider filing a SymbolIndex warm-up issue** (separate 6–10s cost, different mechanism — see #1 follow-ups above) if warm-up is still the dominant first-call latency after the republish.
+3. **Optionally delete** `feat/v1.3-feature-expansion` from origin — no open issues reference it anymore.
+4. **`gh` account gotcha:** active account is `MBrekhof` (has push access to this repo). If a push 403s, run `gh auth switch --user MBrekhof` — `MartinWLN` can't push here.
 
 ## Known limitations / gotchas (unchanged)
 
