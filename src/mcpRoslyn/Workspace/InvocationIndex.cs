@@ -211,7 +211,12 @@ public sealed class InvocationIndex
                 var entry = TryBuildDi(invocation, semantic, docId, methodName);
                 if (entry is not null) lock (_gate) _registrations.Add(entry);
             }
-            else if (IsServiceCollectionCall(invocation, semantic))
+            // ponytail: only bind names that follow DI-registration conventions.
+            // The semantic GetSymbolInfo inside IsServiceCollectionCall is ~50µs/call;
+            // running it on every invocation (98% are ordinary calls) cost 5-13s of
+            // warm-up on real solutions (issue #1). Real IServiceCollection extensions
+            // are named Add*/TryAdd*/Configure*/Replace/Decorate by convention.
+            else if (LooksLikeDiVerb(methodName) && IsServiceCollectionCall(invocation, semantic))
             {
                 var loc = ToLocation(invocation);
                 if (loc is null) continue;
@@ -312,6 +317,15 @@ public sealed class InvocationIndex
         if (loc is null) return null;
         return new DiEntry(serviceType, implType, lifetime, inv.ToString(), docId, loc);
     }
+
+    // Cheap syntactic gate for the Unclassified-DI fallback (issue #1). A superset of
+    // real IServiceCollection extension names; the semantic confirm filters the rest out.
+    private static bool LooksLikeDiVerb(string name) =>
+        name.StartsWith("Add", StringComparison.Ordinal)
+        || name.StartsWith("TryAdd", StringComparison.Ordinal)
+        || name.StartsWith("Configure", StringComparison.Ordinal)
+        || name.StartsWith("PostConfigure", StringComparison.Ordinal)
+        || name is "Replace" or "Decorate" or "RemoveAll";
 
     private static bool IsServiceCollectionCall(InvocationExpressionSyntax inv, SemanticModel sem)
     {
