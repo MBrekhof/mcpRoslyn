@@ -1,14 +1,37 @@
 # Session Handoff
 
-**Last updated:** 2026-06-15 (issue #1 InvocationIndex warm-up perf fix committed + pushed)
+**Last updated:** 2026-08-02 (issue #1 closed out: exe republished, live warm-up measured, #5 filed)
 
 ## Where things stand
 
 - **`main` HEAD is `3313efc`** (InvocationIndex DI-verb gate, issue #1) — committed and pushed to origin.
 - **v1.3 IS LIVE ON MAIN and TAGGED.** `v1.3.0` annotated tag points at merge commit `33d8ad4`. Post-tag patches (dedup fixes, downward discovery, the #1 perf fix) sit on top of the tag.
-- **Published exe is STALE re: the #1 fix.** `bin/publish/mcpRoslyn.exe` was last rebuilt 2026-06-08 (carries downward discovery, NOT the #1 perf fix). **Republish needed** for live sessions to pick up the faster warm-up: `dotnet publish src/mcpRoslyn -c Release -o bin/publish` (stop running mcpRoslyn.exe instances first — they hold the file lock).
-- Branch `feat/v1.3-feature-expansion` still exists on origin; safe to delete (no open issue references it).
+- **Published exe is CURRENT.** Republished 2026-08-02 22:09 — `bin/publish/mcpRoslyn.exe` now carries the #1 perf fix. (Republish command: `dotnet publish src/mcpRoslyn -c Release -o bin/publish`; stop running mcpRoslyn.exe instances first — they hold the file lock.)
+- **Issue #1 is CLOSED.** Commented with root cause + live measurement.
+- Branch `feat/v1.3-feature-expansion` no longer exists on origin (delete attempt returned "remote ref does not exist"). Nothing to clean up.
 - Working tree on main is clean.
+
+## What the 2026-08-02 session did
+
+Finished the #1 close-out that the previous session left pending.
+
+1. **Republished the exe** (killed the running instance holding the lock first). Verified timestamp.
+2. **Commented on and closed issue #1**, then **filed [#5](https://github.com/MBrekhof/mcpRoslyn/issues/5)** for SymbolIndex.
+3. **Measured the live warm-up** — and found the end-to-end gain is smaller than the issue's headline implied.
+
+**The 6–7× in `3313efc`'s commit message is bind work only, not the log line.** `Invocation index built in X ms` times all of `BuildAsync`: syntax root + `DescendantNodes()` per document, a semantic model per document, and `WalkTypes(GlobalNamespace)`. The gate touches none of that. Three cold runs against duetGPT, using **SymbolIndex as a control** (unaffected by the fix, builds sequentially just before it):
+
+| run | solution load | warm-up | symbol index (control) | invocation index |
+|---|---|---|---|---|
+| 1 | 16471 ms | 19266 ms | 16215 ms | 9772 ms |
+| 2 | 2418 ms | 11384 ms | 7276 ms | 4764 ms |
+| 3 | 2337 ms | 11175 ms | 7170 ms | 7323 ms |
+
+- **Run 1 is a cold-everything outlier** taken right after `dotnet publish` — 16.5 s solution load vs ~2.4 s, control 2× the others. Discard it. Had I stopped at run 1 I would have wrongly concluded the fix barely worked.
+- **Steady state ~4.8–7.3 s vs ~13 s pre-fix ≈ 2× end-to-end**, not 6–7×. Reconciles with bind-only: ~3.3 s non-bind + ~1.45 s residual bind ≈ 4.8 s.
+- **Raw readings are unreliable to ±35% even at constant machine speed.** Runs 2 and 3 have controls 1.5% apart (7276/7170 ms) but invocation times 1.5× apart (4764/7323 ms). **Use the control ratio, not raw ms.** This is the sharpened version of the previous session's noise lesson: a sibling-index control catches drift that repeated cold runs alone do not.
+
+**Method note that generalizes:** the two indexes build sequentially in `WorkspaceService.LoadUnsafeAsync`, which is what makes SymbolIndex a valid control — same machine state, same moment, independent of the change. Look for an in-process control like this before trusting any timing on this machine.
 - **Tests:** 111 passing. 1 acceptance test `[Explicit]` (not run by default).
 - **Acceptance verdict: PASS-WITH-FOLLOWUPS.** Full report at `docs/acceptance/2026-05-21-v1.3-acceptance.md`.
 
@@ -25,9 +48,7 @@
 
 ## Open follow-ups for #1
 
-- **Republish the exe** (see above) so live sessions get the faster warm-up.
-- **Comment/close issue #1** referencing commit `3313efc`. Not yet done this session.
-- **SymbolIndex's separate 6–10s warm-up is out of scope for #1** — different mechanism (walks all declared symbols + `ToSymbolInfo`/`GetAttributes`, no per-invocation binding). Worth its own issue if warm-up is still the dominant first-call latency after the exe republish.
+All closed out on 2026-08-02: exe republished, issue commented + closed, SymbolIndex filed as **[#5](https://github.com/MBrekhof/mcpRoslyn/issues/5)** (~7.2 s, ~30% of the ~23–26 s time-to-ready; very consistent run-to-run, unlike InvocationIndex). #5 suggests measuring first — split per-symbol cost across `GetAttributes`/`ToSymbolInfo`/enumeration — since #1's first suspect (`WalkTypes`) was a 133 ms red herring. It also notes the two indexes build sequentially, so overlapping them is a possible cheap win worth measuring.
 
 ## What the 2026-06-08 session did
 
@@ -48,7 +69,8 @@
 
 | # | Title | Status |
 |---|---|---|
-| [#1](https://github.com/MBrekhof/mcpRoslyn/issues/1) | InvocationIndex warm-up cost ~30x over predicted budget (~13s vs +400ms) | FIX COMMITTED (`3313efc`) — DI-verb gate cut bind work ~6–7× (~8–11s → ~1.45s). Pending: exe republish + issue close |
+| [#1](https://github.com/MBrekhof/mcpRoslyn/issues/1) | InvocationIndex warm-up cost ~30x over predicted budget (~13s vs +400ms) | CLOSED (`3313efc`) — DI-verb gate. Bind work ~6–7× (~8–11s → ~1.45s); **live end-to-end ~2×** (~13s → ~4.8–7.3s). Exe republished 2026-08-02 |
+| [#5](https://github.com/MBrekhof/mcpRoslyn/issues/5) | SymbolIndex warm-up ~7.2s now the largest index cost | OPEN — filed 2026-08-02 with measurements |
 | [#2](https://github.com/MBrekhof/mcpRoslyn/issues/2) | `find_references` cold-cache 2.8x regression | CLOSED (methodology error) |
 | [#3](https://github.com/MBrekhof/mcpRoslyn/issues/3) | `find_implementations` 8.4x regression | CLOSED (methodology error) |
 | [#4](https://github.com/MBrekhof/mcpRoslyn/issues/4) | `find_references` returns inconsistent counts | CLOSED (defensive dedup shipped) |
@@ -64,10 +86,11 @@ The v1.3 acceptance compared v1.2 in-process timings against v1.3 published-exe 
 
 ## What's next when you return
 
-1. **Finish closing out #1:** republish the exe (`dotnet publish src/mcpRoslyn -c Release -o bin/publish`, stop running instances first) and comment/close issue #1 referencing `3313efc`. Then re-check warm-up against duetGPT with `--log-file` to confirm the live `Invocation index built in X ms` line dropped.
-2. **Consider filing a SymbolIndex warm-up issue** (separate 6–10s cost, different mechanism — see #1 follow-ups above) if warm-up is still the dominant first-call latency after the republish.
-3. **Optionally delete** `feat/v1.3-feature-expansion` from origin — no open issues reference it anymore.
+1. **[#5](https://github.com/MBrekhof/mcpRoslyn/issues/5) — SymbolIndex warm-up (~7.2 s).** The only open issue. Measure before optimizing; see the issue body for the suggested split.
+2. **Real-session validation** (`TODO.md`) is still the highest-value non-perf item: use mcpRoslyn in one feature-sized duetGPT task and record missing tools / wrong response shapes / cold-start friction. The acceptance logs cover canned-query correctness, not usefulness in an agent loop.
+3. **v1.4 nice-to-haves** remain in `TODO.md` (`project_overview.TargetFramework` always null, `find_registrations` consumer detection over-broad, dead-code `Skipped` counter truncation, the CS0618 `WorkspaceFailed` obsolete warning).
 4. **`gh` account gotcha:** active account is `MBrekhof` (has push access to this repo). If a push 403s, run `gh auth switch --user MBrekhof` — `MartinWLN` can't push here.
+5. **Republish the exe after any src change** — live Claude Code sessions run `bin/publish/mcpRoslyn.exe`, not your build output, so a fix is invisible to them until republished. Stop running instances first (they hold the lock); this also drops the MCP server out of the current session until it restarts.
 
 ## Known limitations / gotchas (unchanged)
 

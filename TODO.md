@@ -1,6 +1,6 @@
 # TODO — mcpRoslyn
 
-v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md)). v1.1 warm-up shipped (see [`docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`](docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md)). v1.3 feature-expansion shipped to main (107 tests). v1.3 acceptance follow-ups: #2/#3/#4 closed; #1 still open.
+v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md)). v1.1 warm-up shipped (see [`docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`](docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md)). v1.3 feature-expansion shipped to main (111 tests). v1.3 acceptance follow-ups: #1/#2/#3/#4 all closed. Only open issue is [#5](https://github.com/MBrekhof/mcpRoslyn/issues/5) (SymbolIndex warm-up ~7.2 s).
 
 ## v1.1 follow-ups (from acceptance log)
 
