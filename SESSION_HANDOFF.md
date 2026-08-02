@@ -1,10 +1,10 @@
 # Session Handoff
 
-**Last updated:** 2026-08-02 (issue #1 closed out: exe republished, live warm-up measured, #5 filed)
+**Last updated:** 2026-08-02 (issue #1 closed out, ContextBoard wired up, TEST-001/002 shipped)
 
 ## Where things stand
 
-- **`main` HEAD is `3313efc`** (InvocationIndex DI-verb gate, issue #1) — committed and pushed to origin.
+- **`main` HEAD is `104331e`** (TEST-001/TEST-002) — committed and pushed to origin. Four commits this session: `b088afe` (#1 close-out + measurement), `d698555` (board wiring), `759e89d` (AREA-NNN prefixes), `104331e` (the two test fixes).
 - **v1.3 IS LIVE ON MAIN and TAGGED.** `v1.3.0` annotated tag points at merge commit `33d8ad4`. Post-tag patches (dedup fixes, downward discovery, the #1 perf fix) sit on top of the tag.
 - **Published exe is CURRENT.** Republished 2026-08-02 22:09 — `bin/publish/mcpRoslyn.exe` now carries the #1 perf fix. (Republish command: `dotnet publish src/mcpRoslyn -c Release -o bin/publish`; stop running mcpRoslyn.exe instances first — they hold the file lock.)
 - **Issue #1 is CLOSED.** Commented with root cause + live measurement.
@@ -32,7 +32,21 @@ Finished the #1 close-out that the previous session left pending.
 - **Raw readings are unreliable to ±35% even at constant machine speed.** Runs 2 and 3 have controls 1.5% apart (7276/7170 ms) but invocation times 1.5× apart (4764/7323 ms). **Use the control ratio, not raw ms.** This is the sharpened version of the previous session's noise lesson: a sibling-index control catches drift that repeated cold runs alone do not.
 
 **Method note that generalizes:** the two indexes build sequentially in `WorkspaceService.LoadUnsafeAsync`, which is what makes SymbolIndex a valid control — same machine state, same moment, independent of the change. Look for an in-process control like this before trusting any timing on this machine.
-- **Tests:** 111 passing. 1 acceptance test `[Explicit]` (not run by default).
+
+### ContextBoard wiring (this repo was never actually syncing)
+
+The board project existed with **zero cards**, so the sync hook had been a silent no-op for the life of the repo: sync only touches cards a file cites via `(ID: nnnn)`, and nothing here cited one. Minted **17 cards** for the open backlog, cited them, and gave them `AREA-NNN` prefixes matching ContextBoard's own convention — PERF, IDX, TOOL, WS, TEST, DIST, ARCH, VAL.
+
+**The trap, hit for real:** a cited checkbox's card body comes from **indented lines beneath it**, not the checkbox line. The parser treats the checkbox line as a board-owned title and discards it; `FileSyncService` then assigns the parsed body **unconditionally**, so a cited one-liner writes `null` straight over the card. The first sync pass blanked all 17 bodies I'd just written; re-indenting the file and re-syncing restored them. TODO.md now carries a note about this at the top — **keep the indentation when editing**. Filed against ContextBoard as **SYNC-016** (card 1187) with repro and suggested fixes.
+
+Two operational notes: prefixes were set on the **board** (`update_card`), since the board owns Title and sync never writes it — the TODO.md copies are for humans only. And the sync hook exits 0 silently on success *and* on most failures, so verify with `get_card` rather than trusting it. Run it manually with `CLAUDE_PROJECT_DIR="C:\Projects\mcpRoslyn" powershell -NoProfile -ExecutionPolicy Bypass -File C:/Projects/ContextBoard/hooks/sync-files.ps1 < /dev/null` — without that env var it exits at line 34 having done nothing.
+
+### TEST-001 / TEST-002 shipped (`104331e`)
+
+- **TEST-001** — `Skipped_counters_report_publicMembers_and_tests` asserted only `Skipped.Should().NotBeNull()`, with the real assertion commented out as "omit if fragile"; it passed even with both counters at zero. Now asserts both counters are non-zero **and** that what they claim to exclude is absent from `Candidates` (no `Public`/`Protected`, nothing from TestTests). **Verified non-vacuous by inverting each assertion to `Be(0)` and confirming failure** — fixture yields `PublicMembers` 148, `Tests` 6. Exact counts left unasserted; the original brittleness worry was right, the fix was to pick a robust assertion, not drop it.
+- **TEST-002** — comment quoted `$"Hello, {name}!"`; fixture has read `$"Hello, {name.Trim()}!"` since Task 6. The column-19 arithmetic in the same comment was re-checked against the fixture and is correct.
+
+- **Tests:** 111 passing, 0 failing (full suite run on `104331e`). 1 acceptance test `[Explicit]` (not run by default).
 - **Acceptance verdict: PASS-WITH-FOLLOWUPS.** Full report at `docs/acceptance/2026-05-21-v1.3-acceptance.md`.
 
 ## What the 2026-06-15 session did (issue #1)
@@ -86,9 +100,12 @@ The v1.3 acceptance compared v1.2 in-process timings against v1.3 published-exe 
 
 ## What's next when you return
 
-1. **[#5](https://github.com/MBrekhof/mcpRoslyn/issues/5) — SymbolIndex warm-up (~7.2 s).** The only open issue. Measure before optimizing; see the issue body for the suggested split.
-2. **Real-session validation** (`TODO.md`) is still the highest-value non-perf item: use mcpRoslyn in one feature-sized duetGPT task and record missing tools / wrong response shapes / cold-start friction. The acceptance logs cover canned-query correctness, not usefulness in an agent loop.
-3. **v1.4 nice-to-haves** remain in `TODO.md` (`project_overview.TargetFramework` always null, `find_registrations` consumer detection over-broad, dead-code `Skipped` counter truncation, the CS0618 `WorkspaceFailed` obsolete warning).
+**Everything is in Backlog except the two closed TEST cards** — the board was deliberately cleared to Backlog, so pick one and move it to Todo rather than assuming a queue exists.
+
+1. **VAL-001 (card 1171) — real-session validation.** Recommended first, because **three other cards are explicitly gated on it** and can't be answered without it: TOOL-004 (*"if duetGPT acceptance shows agents want both visible"*), TOOL-005 (*"add based on observed gaps in real sessions"*), DIST-002 (*"re-evaluate once session data shows…"*). Doing it first either unblocks those with evidence or kills them. Needs a real duetGPT session with the MCP server connected, and its deliverable is written findings, not code — worth deciding the output shape up front so it doesn't drift into unstructured poking. Consider recording those three as real `add_dependency` links so the ordering isn't buried in card prose.
+2. **PERF-001 (card 1170) — SymbolIndex warm-up (~7.2 s), GitHub [#5](https://github.com/MBrekhof/mcpRoslyn/issues/5).** The only open GitHub issue. Deliberately *not* recommended first: it's ~7.2 s of a ~24 s once-per-session cost, so even a 2× win saves ~3.6 s, and we don't yet know whether startup latency is what actually hurts in practice — VAL-001 is what would tell us. Measure before optimizing.
+3. **WS-002 (card 1173)** is the best quick win at ~0.5 h: removes the CS0618 `WorkspaceFailed` warning that fires on every single build.
+4. Remaining v1.4 items are all carded in Backlog with bodies — see the board or `TODO.md`.
 4. **`gh` account gotcha:** active account is `MBrekhof` (has push access to this repo). If a push 403s, run `gh auth switch --user MBrekhof` — `MartinWLN` can't push here.
 5. **Republish the exe after any src change** — live Claude Code sessions run `bin/publish/mcpRoslyn.exe`, not your build output, so a fix is invisible to them until republished. Stop running instances first (they hold the lock); this also drops the MCP server out of the current session until it restarts.
 
@@ -127,7 +144,7 @@ mcpRoslyn.exe --log-file c:\users\marti\.claude\debug\mcpRoslyn.log
 
 - Acceptance report: [`docs/acceptance/2026-05-21-v1.3-acceptance.md`](docs/acceptance/2026-05-21-v1.3-acceptance.md)
 - Architecture summary: [`ARCHITECTURE.md`](ARCHITECTURE.md) (includes `InvocationIndex` section and 19-tool surface table)
-- Open work: [`TODO.md`](TODO.md) — v1.3 items all closed; nice-to-haves remain
+- Open work: the **ContextBoard** project `mcpRoslyn` (17 cards, all Backlog bar the two closed TEST ones) — [`TODO.md`](TODO.md) mirrors it and cites each card id
 - v1 design + plan + acceptance: `docs/plans/2026-05-15-*.md`, `docs/acceptance/2026-05-15-v1-acceptance.md`
 - v1.1 warm-up: `docs/plans/2026-05-16-warmup-precompilation-{design,implementation}.md`, `docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`
 - v1.2 SymbolIndex: `docs/plans/2026-05-16-attribute-index-{design,implementation}.md`, `docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md`
