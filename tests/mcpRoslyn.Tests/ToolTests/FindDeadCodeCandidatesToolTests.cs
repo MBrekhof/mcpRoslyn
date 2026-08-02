@@ -33,9 +33,20 @@ public sealed class FindDeadCodeCandidatesToolTests
     {
         await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
         var r = await host.Tool.InvokeAsync(maxResults: 100);
-        r.Result!.Skipped.Should().NotBeNull();
-        // Some public members are skipped — at minimum TestLib has public interfaces / methods
-        // Don't assert exact counts (fixture may change); just non-zero.
-        // r.Result.Skipped.PublicMembers.Should().BeGreaterThan(0);  // omit if fragile
+
+        // Exact counts would be fixture-brittle, so assert the counters are populated and that
+        // what they claim to have excluded really is absent from the results — a bare non-null
+        // check passed even when both counters were stuck at zero.
+        r.Result!.Skipped.PublicMembers.Should().BeGreaterThan(0,
+            "TestLib and TestWeb declare public types and members, which are never dead-code candidates");
+        r.Result.Skipped.Tests.Should().BeGreaterThan(0,
+            "the TestTests fixture project is skipped while includeTests is false");
+
+        r.Result.Candidates.Should().NotContain(
+            c => c.Accessibility == "Public" || c.Accessibility == "Protected",
+            "public surface is counted into Skipped.PublicMembers instead of reported");
+        r.Result.Candidates.Should().NotContain(
+            c => c.Location != null && c.Location.FilePath.Contains("TestTests"),
+            "test-project symbols are counted into Skipped.Tests instead of reported");
     }
 }

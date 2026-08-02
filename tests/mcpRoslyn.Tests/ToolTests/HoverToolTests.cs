@@ -16,7 +16,7 @@ public class HoverToolTests
             AppContext.BaseDirectory,
             "Fixtures", "TestSolution", "TestLib", "EnglishGreeter.cs");
 
-        // Line 5: `    public string Greet(string name) => $"Hello, {name}!";`
+        // Line 5: `    public string Greet(string name) => $"Hello, {name.Trim()}!";`
         // The 'G' of Greet is at column 19 (1-based, after 4 spaces + "public string ").
         var result = await host.Tool.InvokeAsync(englishGreeterPath, line: 5, column: 19, ct: CancellationToken.None);
 

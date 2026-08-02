@@ -73,10 +73,8 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
   Needs .csproj XML parsing. Planned for v1.4.
 - [ ] **TOOL-004: `find_entrypoints` hosted-service de-dup pivot.** (ID: 1181)
   Tool layer collapses "registered" + "subclass" entries for the same type. If duetGPT acceptance shows agents want both visible, expose a flag. Conditional on real-session feedback — don't build speculatively.
-- [ ] **TEST-002: `HoverToolTests.cs` line 19 stale comment.** (ID: 1180)
-  Comment references an `EnglishGreeter.Greet` body that was changed in Task 6. Trivial cleanup.
-- [ ] **TEST-001: Strengthen `find_dead_code_candidates` test 3.** (ID: 1179)
-  `Skipped_counters_report_publicMembers_and_tests` is currently a trivial null check — replace with a real count assertion in v1.4.
+- [x] ~~**TEST-002: `HoverToolTests.cs` line 19 stale comment.**~~ (ID: 1180) Done 2026-08-02. The comment quoted `$"Hello, {name}!"` while the fixture reads `$"Hello, {name.Trim()}!"`. The column-19 arithmetic in the same comment was re-checked and is correct.
+- [x] ~~**TEST-001: Strengthen `find_dead_code_candidates` test 3.**~~ (ID: 1179) Done 2026-08-02. `Skipped_counters_report_publicMembers_and_tests` now asserts both counters are non-zero (fixture yields `PublicMembers` 148, `Tests` 6) and that what they claim to exclude is absent from `Candidates`. Verified non-vacuous by inverting each assertion to `Be(0)` and confirming it fails — the old `Should().NotBeNull()` passed even with both counters stuck at zero.
 
 ## Real-session validation (still to do)
 
