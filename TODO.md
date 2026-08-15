@@ -55,7 +55,12 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
 
   Reviewed 2026-08-15 while clearing the other TOOL cards and deliberately left closed. Nothing in the BPG work wanted
   a pattern that isn't there — the gaps that did show up were in `find_dead_code_candidates` (see TOOL-006), not in the
-  search grammar. Reassess after VAL-001.
+  search grammar. Now formally blocked on VAL-001 as a board dependency rather than a note in prose.
+
+  **Direction, from comparing against NDepend (2026-08-15):** their equivalent is CQLinq — one query language over a
+  code model, not N fixed patterns. The transferable lesson is about the *shape of the answer*, not about copying
+  CQLinq: when this card finally has evidence, if it names three or four missing patterns rather than one, the right
+  response is probably a general query mechanism, not pattern six. One missing pattern still just means add the pattern.
 - [ ] **ARCH-001: `ISymbolProvider` abstraction.** (ID: 1186)
   If we ever wrap gopls/pyright/rust-analyzer, factor `WorkspaceService` behind a more abstract provider interface. Don't build it speculatively — one implementation needs no interface.
 
@@ -206,6 +211,58 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
   It runs as a pass at the end of `LoadUnsafeAsync`, not inside the handler: diagnostics arrive during the load, before
   there is a project list to check them against. Verified end-to-end on the solution that produced the false failures —
   all three now report `ProjectLoadedWithWarnings` with the right `ProjectName`, with 4 projects loaded.
+
+## From the NDepend comparison (2026-08-15)
+
+NDepend open-sourced an [MCP server](https://github.com/ndepend/NDepend.MCP.Server) on 2026-02-26 (14 tools) and an
+[AI Issue Fix](https://www.ndepend.com/docs/ai-issue-fix) feature on 2026-01-30, so it is now an agent-loop tool and
+not only a human-report tool. Comparing the two surfaces produced three items worth keeping. **Its structural
+advantage over us stays put:** it analyses build output, so it needs a green build and an analysis run, while
+mcpRoslyn answers on a branch with compile errors on the floor.
+
+- [ ] **DIAG-001: Surface Roslyn analyzer diagnostics, not just compiler diagnostics.** (ID: 1311) — **Todo, est. 3 h**
+  `get_compilation_errors` / `get_document_diagnostics` call `compilation.GetDiagnostics()` and
+  `semantic.GetDiagnostics()` only — there is no `CompilationWithAnalyzers` in src. So `.editorconfig` severities,
+  StyleCop, Roslynator, NetAnalyzers and any DevExpress/XAF analyzers are invisible. For an agent handing code back
+  that is the difference between **"it compiles"** and **"it passes this project's own bar"**.
+
+  Roslyn-native, nothing new to invent: `Project.AnalyzerReferences` is already populated by MSBuild and the
+  compilations are already warmed. **But `CompilationWithAnalyzers` is expensive** — a large share of real build time —
+  so scope it per-document and on-demand, opt-in, and keep it out of warm-up entirely. PERF-001 was precisely the
+  lesson that unbounded startup work is the wrong trade, and `InvocationIndex` already costs ~12 s on duetGPT.
+  Respect configured severities, or it will report rules the project has deliberately switched off.
+
+  Soft-sequenced behind VAL-001, deliberately **not** a blocking dependency: the gap is real either way, but VAL-001
+  would show how much it is worth.
+
+- [ ] **PERF-002: Measure per-tool response size — token cost is a design metric.** (ID: 1312) — **Todo, est. 1 h**
+  Measurement, not a feature. Every response is spent from the agent's context budget and we have never measured any
+  of them. Serialize a representative call to each of the 20 tools against BPG, record bytes and approximate tokens,
+  and change *defaults* where the numbers justify it — `analyze_symbol` returns five things at once, and
+  `find_dead_code_candidates` returns full signatures plus locations. Prefer a better default over a new parameter.
+
+  Prompted by NDepend's pitch of workspace facts "without sending source code to the LLM and without consuming
+  tokens". The transferable idea is not their feature — it is treating tokens as a first-class metric the way this
+  repo already treats milliseconds. Pairs with VAL-001's "which response shape was awkward to consume", and unlike
+  that question this half needs no live session.
+
+- [ ] **TOOL-007: Semantic diff against a baseline.** (ID: 1313) — Backlog, **blocked on VAL-001**
+  "What public API did this branch change" — added/removed/re-signatured members vs the branch point. Carded so it
+  isn't lost, **not** because it is justified. `git diff` already answers "which lines changed" far more cheaply; this
+  is only worth building for the part git can't do — telling a signature change from a comment reflow, or noticing a
+  public member vanished. If VAL-001 shows the agent just reads the git diff, close this unbuilt.
+
+### Evaluated and deliberately not building
+
+Recorded so it isn't re-litigated. From NDepend's surface, these are the wrong shape for this tool: **code metrics**
+(cyclomatic complexity, coupling, LCOM), **quality gates**, **trend charts**, and **dependency SVG diagrams**. All are
+governance-shaped — built for a human reviewing a team's work over time, which is neither our consumer nor our
+situation.
+
+**Layering/dependency rules are also a deliberate skip**, despite the tempting `BPG.Core` case (a project that
+violated its own documented "dependency-free" rule). `project_overview` already returns each project's reference list,
+and it already caught that violation on the first call. The data is exposed; wrapping a rules engine around it is
+rebuilding NDepend badly.
 
 ## Real-session validation (still to do)
 
