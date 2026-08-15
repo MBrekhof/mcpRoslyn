@@ -109,6 +109,38 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     internal static bool IsUnsupportedProjectLanguage(string message)
         => message.Contains("is not associated with a language", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// MSBuild reports package-pruning suggestions and vulnerability advisories through the same
+    /// channel as real load failures, at kind <c>Failure</c> and worded "Msbuild failed when
+    /// processing…", for projects that load perfectly well. A diagnostic naming a project that IS
+    /// in the loaded solution demonstrably did not stop it loading, so it is re-kinded; one naming
+    /// an absent project stays a `Failure`, which is the honest signal for a declared-but-unloaded
+    /// project (WS-004).
+    /// </summary>
+    internal static WorkspaceLoadDiagnostic Reclassify(WorkspaceLoadDiagnostic diag, ISet<string> loadedProjectFileNames)
+        => diag.Kind == "Failure"
+           && diag.ProjectName is not null
+           && loadedProjectFileNames.Contains(diag.ProjectName)
+            ? diag with { Kind = "ProjectLoadedWithWarnings" }
+            : diag;
+
+    private void ReclassifyLoadedProjectDiagnostics(Solution solution)
+    {
+        // Compare on the .csproj file name, not Project.Name — a multi-targeted project is named
+        // "Foo(net8.0)" while the message quotes the path to Foo.csproj.
+        var loaded = solution.Projects
+            .Select(p => p.FilePath)
+            .Where(f => f is not null)
+            .Select(f => Path.GetFileNameWithoutExtension(f)!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        lock (_diagnosticsLock)
+        {
+            for (var i = 0; i < _diagnostics.Count; i++)
+                _diagnostics[i] = Reclassify(_diagnostics[i], loaded);
+        }
+    }
+
     private async Task LoadUnsafeAsync(CancellationToken ct)
     {
         lock (_diagnosticsLock) _diagnostics.Clear();
@@ -134,6 +166,10 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         _solution = await _workspace.OpenSolutionAsync(options.SolutionPath, cancellationToken: ct);
         log.LogInformation("Loaded {ProjectCount} projects in {Elapsed} ms from {Path}",
             _solution.Projects.Count(), sw.ElapsedMilliseconds, options.SolutionPath);
+
+        // Has to happen here, not in the handler: diagnostics arrive during the load, before there
+        // is a project list to check them against (WS-004).
+        ReclassifyLoadedProjectDiagnostics(_solution);
 
         // seed mtime cache
         foreach (var doc in _solution.Projects.SelectMany(p => p.Documents))

@@ -153,6 +153,28 @@ public class WorkspaceServiceTests
         => WorkspaceService.ExtractProjectName(message).Should().Be(expected);
 
     [Test]
+    public void Failure_naming_a_project_that_loaded_is_re_kinded_but_one_naming_an_absent_project_is_not()
+    {
+        var loaded = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "duetGPT", "duetGPT.Tests" };
+
+        // Real message from a run where all 4 projects loaded — a pruning suggestion, not a failure.
+        var pruning = new Contracts.WorkspaceLoadDiagnostic("Failure",
+            @"Msbuild failed when processing the file 'C:\x\duetGPT.csproj' with message: PackageReference System.Text.Json will not be pruned.",
+            "duetGPT");
+        WorkspaceService.Reclassify(pruning, loaded).Kind.Should().Be("ProjectLoadedWithWarnings");
+
+        // A project that is genuinely missing from the loaded solution keeps its Failure kind —
+        // that is the signal a declared-but-unloaded project should produce.
+        var missing = new Contracts.WorkspaceLoadDiagnostic("Failure",
+            @"Msbuild failed when processing the file 'C:\x\Gone.csproj' with message: whatever.", "Gone");
+        WorkspaceService.Reclassify(missing, loaded).Kind.Should().Be("Failure");
+
+        // Already-classified kinds are left alone.
+        var esproj = new Contracts.WorkspaceLoadDiagnostic("SkippedUnsupportedProject", "…", "Frontend");
+        WorkspaceService.Reclassify(esproj, loaded).Kind.Should().Be("SkippedUnsupportedProject");
+    }
+
+    [Test]
     public async Task Project_with_no_Roslyn_language_is_classified_not_reported_as_a_failure()
     {
         // A polyglot solution (.esproj/.njsproj/.sqlproj) always trips WorkspaceFailed. That is

@@ -190,19 +190,22 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
 
 ## Spotted while closing WS-001 (2026-08-15)
 
-- [ ] **WS-004: MSBuild non-fatal messages are reported at kind `Failure` on projects that load fine.** (ID: 1310)
-  Loading `C:\Projects\duetgpt\duetGPT.sln` (4 projects, **all 4 loaded**) emits three `Failure` diagnostics: two
-  package-pruning suggestions on `duetGPT.csproj` and a vulnerability advisory on `duetGPT.Tests.csproj`. None of them
-  stopped anything loading, but `Kind` is `Failure` and the text opens with "Msbuild failed", so the diagnostics list
-  reads as a broken solution when nothing is broken. Same readability problem TOOL-006 raised for `.esproj`.
+- [x] ~~**WS-004: MSBuild non-fatal messages are reported at kind `Failure` on projects that load fine.**~~ (ID: 1310)
+  Filed and fixed 2026-08-15. Loading `C:\Projects\duetgpt\duetGPT.sln` (4 projects, **all 4 loaded**) emitted three
+  `Failure` diagnostics — two package-pruning suggestions on `duetGPT.csproj` and a vulnerability advisory on
+  `duetGPT.Tests.csproj`. None stopped anything loading, but `Kind` was `Failure` and the text opens with "Msbuild
+  failed", so the diagnostics list read as a broken solution when nothing was broken. Same readability problem
+  TOOL-006 raised for `.esproj`.
 
-  Cheap now that WS-003 shipped `ProjectName`: after `OpenSolutionAsync` returns, a diagnostic naming a project that
-  IS in `solution.Projects` demonstrably did not prevent loading, so it can be reclassified (e.g.
-  `ProjectLoadedWithWarnings`); one naming an absent project stays a real `Failure` — which is also the honest signal
-  for the declared-but-unloaded case WS-001 was originally chasing.
+  Cheap because WS-003 had just shipped `ProjectName`: a diagnostic naming a project that IS in `solution.Projects`
+  demonstrably did not prevent it loading, so it is re-kinded `ProjectLoadedWithWarnings`. One naming an absent project
+  keeps `Failure` — which is the honest signal for the declared-but-unloaded case WS-001 was originally chasing.
+  Matching is on the `.csproj` file name rather than `Project.Name`, because a multi-targeted project is named
+  `Foo(net8.0)` while the message quotes the path to `Foo.csproj`.
 
-  Ordering constraint: diagnostics arrive during the load, before the final project list exists, so this is a
-  post-processing pass at the end of `LoadUnsafeAsync`, not a decision inside the handler.
+  It runs as a pass at the end of `LoadUnsafeAsync`, not inside the handler: diagnostics arrive during the load, before
+  there is a project list to check them against. Verified end-to-end on the solution that produced the false failures —
+  all three now report `ProjectLoadedWithWarnings` with the right `ProjectName`, with 4 projects loaded.
 
 ## Real-session validation (still to do)
 
