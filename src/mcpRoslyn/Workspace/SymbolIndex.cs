@@ -204,9 +204,15 @@ public sealed class SymbolIndex
         return metadata == target;
     }
 
+    /// <summary>
+    /// Walks the compilation's OWN assembly, not <c>Compilation.GlobalNamespace</c>. The latter
+    /// merges every referenced assembly, so this walked the whole BCL and every package on each
+    /// project only to discard the results — the entries kept are identical either way, because a
+    /// symbol with no source-declaring document is dropped a few lines below (PERF-001).
+    /// </summary>
     private static IEnumerable<ISymbol> WalkAllSymbols(Compilation compilation)
     {
-        foreach (var sym in WalkNamespace(compilation.GlobalNamespace)) yield return sym;
+        foreach (var sym in WalkNamespace(compilation.Assembly.GlobalNamespace)) yield return sym;
 
         static IEnumerable<ISymbol> WalkNamespace(INamespaceSymbol ns)
         {

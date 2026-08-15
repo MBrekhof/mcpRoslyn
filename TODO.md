@@ -15,14 +15,32 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
 
 ## Performance
 
-- [ ] **PERF-001: SymbolIndex warm-up ~7.2 s is the largest index cost.** (ID: 1170)
-  GitHub [#5](https://github.com/MBrekhof/mcpRoslyn/issues/5). After #1 cut `InvocationIndex` to ~4.8–7.3 s, `SymbolIndex` (~7.2 s) is the biggest single index slice of the ~23–26 s time-to-ready, and unlike `InvocationIndex` it is very consistent run-to-run.
+- [x] ~~**PERF-001: SymbolIndex warm-up ~7.2 s is the largest index cost.**~~ (ID: 1170)
+  Done 2026-08-15. GitHub [#5](https://github.com/MBrekhof/mcpRoslyn/issues/5). **One-line fix**: `WalkAllSymbols`
+  started at `Compilation.GlobalNamespace`, which merges the source assembly with **every referenced assembly**, so each
+  project walked the entire BCL and every package — only to throw the results away, since a symbol with no
+  source-declaring document is dropped a few lines later. It now walks `compilation.Assembly.GlobalNamespace`.
 
-  Different mechanism from #1: it walks all declared symbols calling `ToSymbolInfo`/`GetAttributes`, with no per-invocation overload-resolution bind, so #1's syntactic-gate fix does not transfer.
+  The card said measure first, and measuring is also what proves it loses nothing. Interleaved in-process A/B over the
+  same warmed compilations, with `InvocationIndex` as the control (untouched by this change, so its drift calibrates
+  the rest):
 
-  Measure before optimizing — #1's first suspect (`WalkTypes`) turned out to be a 133 ms red herring. Split per-symbol cost across `GetAttributes` / `ToSymbolInfo` / enumeration and get a symbol count.
+  | solution | `GlobalNamespace` | `Assembly.GlobalNamespace` | entries (both) | ratio to control |
+  |---|---|---|---|---|
+  | BPG | 2323 / 1852 ms | 117 / 96 ms | 4 910 | 2.45–4.00 → 0.07–0.12 |
+  | duetGPT | 2214 ms | 76 / 82 ms | 12 620 | 0.83 → 0.03 |
 
-  Note `SymbolIndex` and `InvocationIndex` build **sequentially** in `WorkspaceService.LoadUnsafeAsync` over the same warmed compilations, so overlapping them is a possible cheap win independent of any per-symbol work — but it trades wall-clock for CPU contention, so measure rather than assume.
+  **Identical entry counts on both solutions** is the load-bearing number — the walk got ~20–27× cheaper without
+  dropping a single symbol. Confirmed cold through the published exe: `Symbol index built in 128 ms` on BPG (8
+  projects), `198 ms` on duetGPT. It is no longer a meaningful slice of time-to-ready.
+
+  Two notes for whoever reads #5 next. The issue's headline "~7.2 s" was measured when `duetGPT.sln` declared 4–5
+  projects; after the 2026-07-30 repo flatten it declares **1**, so that figure can't be reproduced as stated —
+  BPG is the better benchmark now. And `InvocationIndex` is now clearly the dominant index cost (1715 ms on BPG,
+  5993 ms on duetGPT), i.e. the residual bind work from #1 rather than anything in this card.
+
+  Not done, and no longer worth doing for this reason: overlapping the two index builds. They still run sequentially in
+  `WorkspaceService.LoadUnsafeAsync`, but with `SymbolIndex` at ~0.1 s there is nothing left to overlap.
 
 ## Deferred from v1 design
 
