@@ -13,7 +13,8 @@ public sealed record ProjectSummary(
     string? TargetFramework,
     int DocumentCount,
     IReadOnlyList<string> ProjectReferences,
-    IReadOnlyList<PackageRef> PackageReferences);
+    IReadOnlyList<PackageRef> PackageReferences,
+    bool? IsPackable = null);
 public sealed record ProjectOverviewResult(
     string SolutionPath,
     IReadOnlyList<ProjectSummary> Projects,
@@ -24,7 +25,7 @@ internal sealed class ProjectOverviewTool(IWorkspaceService ws, ILogger<ProjectO
     : ToolBase(ws, log)
 {
     [McpServerTool(Name = "project_overview")]
-    [Description("Returns the loaded solution's projects with target frameworks, package references, and project references.")]
+    [Description("Returns the loaded solution's projects with target frameworks, IsPackable, package references, and project references.")]
     public Task<Contracts.ToolResult<ProjectOverviewResult>> InvokeAsync(
         int maxProjects = 25,
         int maxPackagesPerProject = 8,
@@ -34,18 +35,21 @@ internal sealed class ProjectOverviewTool(IWorkspaceService ws, ILogger<ProjectO
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
-            var projects = solution.Projects.Take(maxProjects).Select(p => new ProjectSummary(
-                Name: p.Name,
-                // TODO(v1.4): extract TargetFramework from .csproj
-                TargetFramework: null,
-                DocumentCount: p.Documents.Count(),
-                ProjectReferences: p.ProjectReferences
-                    .Select(r => solution.GetProject(r.ProjectId)?.Name)
-                    .Where(n => n is not null)
-                    .Take(maxProjectReferencesPerProject)
-                    .ToArray()!,
-                PackageReferences: ReadPackageRefsFromCsproj(p.FilePath, maxPackagesPerProject, log)
-            )).ToArray();
+            var projects = solution.Projects.Take(maxProjects).Select(p =>
+            {
+                var facts = ReadCsproj(p.FilePath, maxPackagesPerProject, log);
+                return new ProjectSummary(
+                    Name: p.Name,
+                    TargetFramework: TfmFromProjectName(p.Name) ?? facts.TargetFramework,
+                    DocumentCount: p.Documents.Count(),
+                    ProjectReferences: p.ProjectReferences
+                        .Select(r => solution.GetProject(r.ProjectId)?.Name)
+                        .Where(n => n is not null)
+                        .Take(maxProjectReferencesPerProject)
+                        .ToArray()!,
+                    PackageReferences: facts.Packages,
+                    IsPackable: facts.IsPackable);
+            }).ToArray();
 
             var result = new ProjectOverviewResult(
                 SolutionPath: solution.FilePath ?? "",
@@ -57,31 +61,58 @@ internal sealed class ProjectOverviewTool(IWorkspaceService ws, ILogger<ProjectO
         }, ct);
 
     /// <summary>
-    /// Reads PackageReference items directly from the .csproj XML.
+    /// MSBuildWorkspace names a multi-targeted project "Foo(net8.0)" — one Project per TFM.
+    /// That suffix is the authoritative per-project framework; the .csproj only carries the
+    /// whole &lt;TargetFrameworks&gt; list, which can't say which of them this Project is.
+    /// </summary>
+    private static string? TfmFromProjectName(string name)
+    {
+        var open = name.LastIndexOf('(');
+        return open > 0 && name.EndsWith(')') ? name[(open + 1)..^1] : null;
+    }
+
+    private sealed record CsprojFacts(string? TargetFramework, bool? IsPackable, IReadOnlyList<PackageRef> Packages);
+
+    /// <summary>
+    /// Reads TargetFramework, IsPackable and PackageReference items directly from the .csproj XML.
     /// More reliable than inspecting MetadataReferences, which may not include
     /// packages whose TFM doesn't match the target framework (e.g., netstandard
     /// packages in a net10.0 project).
     /// </summary>
-    private static IReadOnlyList<PackageRef> ReadPackageRefsFromCsproj(string? csprojPath, int max, ILogger log)
+    private static CsprojFacts ReadCsproj(string? csprojPath, int maxPackages, ILogger log)
     {
         if (string.IsNullOrEmpty(csprojPath) || !File.Exists(csprojPath))
-            return Array.Empty<PackageRef>();
+            return new CsprojFacts(null, null, Array.Empty<PackageRef>());
 
         try
         {
             var doc = XDocument.Load(csprojPath);
-            return doc.Descendants("PackageReference")
+
+            var tfm = (doc.Descendants("TargetFramework").FirstOrDefault()
+                    ?? doc.Descendants("TargetFrameworks").FirstOrDefault())?.Value.Trim();
+            // ponytail: a value still holding an MSBuild variable (inherited from Directory.Build.props,
+            // or $(NetVersion)) is reported as null rather than echoed back as if it were a framework name.
+            // Resolving those means evaluating MSBuild — add only if real solutions need it.
+            if (tfm is not null && (tfm.Length == 0 || tfm.Contains("$("))) tfm = null;
+
+            bool? isPackable = bool.TryParse(doc.Descendants("IsPackable").FirstOrDefault()?.Value.Trim(), out var b)
+                ? b
+                : null;
+
+            var packages = doc.Descendants("PackageReference")
                 .Select(e => new PackageRef(
                     Name: e.Attribute("Include")?.Value ?? "",
                     Version: e.Attribute("Version")?.Value ?? e.Element("Version")?.Value ?? ""))
                 .Where(r => !string.IsNullOrEmpty(r.Name))
-                .Take(max)
+                .Take(maxPackages)
                 .ToArray();
+
+            return new CsprojFacts(tfm, isPackable, packages);
         }
         catch (Exception ex)
         {
             log.LogWarning(ex, "Failed to parse {Path}", csprojPath);
-            return Array.Empty<PackageRef>();
+            return new CsprojFacts(null, null, Array.Empty<PackageRef>());
         }
     }
 }

@@ -66,7 +66,7 @@ Every tool returns structured JSON wrapped in `ToolResult<T>` (`Result` or `Erro
 | Composite | `analyze_symbol` (hover + refs + impls + derived + callers in one call) |
 | Architecture | `project_overview`, `find_entrypoints`, `find_registrations` |
 | Tests | `test_map` (production → test heuristic) |
-| Cleanup | `find_dead_code_candidates` (private/internal members with confidence + denylist) |
+| Cleanup | `find_dead_code_candidates` (private/internal members with confidence + denylist; `includePublicTypes: true` adds unreferenced public **types**, suppressing DI-registered and framework-reached ones) |
 | Editing | `rename_symbol` (preview by default; `applyEdits: true` to write) |
 | Lifecycle | `reload_workspace` |
 

@@ -84,6 +84,13 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// MSBuild's wording when a solution names a project whose extension has no Roslyn language:
+    /// "Cannot open project '…' because the file extension '.esproj' is not associated with a language."
+    /// </summary>
+    internal static bool IsUnsupportedProjectLanguage(string message)
+        => message.Contains("is not associated with a language", StringComparison.OrdinalIgnoreCase);
+
     private async Task LoadUnsafeAsync(CancellationToken ct)
     {
         lock (_diagnosticsLock) _diagnostics.Clear();
@@ -94,9 +101,14 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         _workspace = MSBuildWorkspace.Create();
         _workspace.WorkspaceFailed += (_, e) =>
         {
-            var diag = new WorkspaceLoadDiagnostic(e.Diagnostic.Kind.ToString(), e.Diagnostic.Message);
+            // A polyglot solution (.esproj, .njsproj, .sqlproj…) always raises a Failure here.
+            // That is expected, not broken, so it gets its own kind instead of reading as a real error.
+            var kind = IsUnsupportedProjectLanguage(e.Diagnostic.Message)
+                ? "SkippedUnsupportedProject"
+                : e.Diagnostic.Kind.ToString();
+            var diag = new WorkspaceLoadDiagnostic(kind, e.Diagnostic.Message);
             lock (_diagnosticsLock) _diagnostics.Add(diag);
-            log.LogWarning("MSBuild workspace event: {Kind} {Message}", e.Diagnostic.Kind, e.Diagnostic.Message);
+            log.LogWarning("MSBuild workspace event: {Kind} {Message}", kind, e.Diagnostic.Message);
         };
 
         _solution = await _workspace.OpenSolutionAsync(options.SolutionPath, cancellationToken: ct);

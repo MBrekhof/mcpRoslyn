@@ -30,6 +30,19 @@ public sealed class ProjectOverviewToolTests
     }
 
     [Test]
+    public async Task Reports_target_framework_and_IsPackable_from_csproj()
+    {
+        await using var host = await TestHost.CreateAsync<ProjectOverviewTool>();
+        var result = await host.Tool.InvokeAsync();
+        var projects = result.Result!.Projects;
+
+        projects.Should().OnlyContain(p => p.TargetFramework == "net10.0");
+        projects.Single(p => p.Name == "TestWeb").IsPackable.Should().BeFalse();
+        projects.Single(p => p.Name == "TestLib").IsPackable.Should().BeNull(
+            "TestLib.csproj declares no IsPackable, and the tool reports what the file says rather than guessing the SDK default");
+    }
+
+    [Test]
     public async Task TestTests_lists_xunit_abstractions_package()
     {
         await using var host = await TestHost.CreateAsync<ProjectOverviewTool>();

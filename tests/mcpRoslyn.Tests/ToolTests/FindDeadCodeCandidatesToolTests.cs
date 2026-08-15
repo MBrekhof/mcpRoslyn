@@ -49,4 +49,63 @@ public sealed class FindDeadCodeCandidatesToolTests
             c => c.Location != null && c.Location.FilePath.Contains("TestTests"),
             "test-project symbols are counted into Skipped.Tests instead of reported");
     }
+
+    [Test]
+    public async Task Skipped_counters_stay_complete_when_maxResults_truncates()
+    {
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var full = await host.Tool.InvokeAsync(maxResults: 1000);
+        var capped = await host.Tool.InvokeAsync(maxResults: 1);
+
+        capped.Result!.Candidates.Should().HaveCount(1);
+        capped.Result.Truncated.Should().BeTrue();
+        full.Result!.Truncated.Should().BeFalse();
+
+        // TOOL-003: the scan used to stop at maxResults, so the counters described only the
+        // prefix it had walked. They now describe the whole solution either way.
+        capped.Result.Skipped.PublicMembers.Should().Be(full.Result.Skipped.PublicMembers);
+        capped.Result.Skipped.Tests.Should().Be(full.Result.Skipped.Tests);
+        capped.Result.Skipped.Denylisted.Should().Be(full.Result.Skipped.Denylisted);
+    }
+
+    [Test]
+    public async Task Unreferenced_public_type_is_reported_only_when_includePublicTypes_is_set()
+    {
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+
+        var off = await host.Tool.InvokeAsync(maxResults: 1000);
+        off.Result!.Candidates.Should().NotContain(c => c.Symbol.Contains("FooHelper"));
+
+        var on = await host.Tool.InvokeAsync(includePublicTypes: true, maxResults: 1000);
+        on.Result!.Candidates.Should().Contain(c =>
+            c.Symbol.Contains("FooHelper")
+            && c.Accessibility == "Public"
+            && c.Confidence == "medium");
+    }
+
+    [Test]
+    public async Task Candidates_are_not_repeated_once_per_referencing_project()
+    {
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var r = await host.Tool.InvokeAsync(includePublicTypes: true, maxResults: 1000);
+
+        // TestLib is referenced by TestApp, TestWeb and TestTests, so its symbols land in four
+        // compilations and SymbolIndex holds an entry for each. Every one used to be reported.
+        r.Result!.Candidates.Select(c => $"{c.Symbol}|{c.Location?.FilePath}")
+            .Should().OnlyHaveUniqueItems();
+    }
+
+    [Test]
+    public async Task Framework_reached_public_types_are_suppressed_from_the_public_sweep()
+    {
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var r = await host.Tool.InvokeAsync(includePublicTypes: true, maxResults: 1000);
+
+        // Neither is referenced by name anywhere, so both would be reported without the guard:
+        // BarController is reached by MVC's reflection scan, CustomServicesExtensions through
+        // the extension method it declares (`builder.Services.AddCustomThing()`).
+        r.Result!.Candidates.Should().NotContain(c => c.Symbol.EndsWith("BarController"));
+        r.Result.Candidates.Should().NotContain(c => c.Symbol.EndsWith("CustomServicesExtensions"));
+        r.Result.Skipped.FrameworkReached.Should().BeGreaterThan(0);
+    }
 }

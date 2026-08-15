@@ -95,8 +95,11 @@ internal sealed class FindRegistrationsTool(IWorkspaceService ws, ILogger<FindRe
         var seen = new HashSet<string>();
         foreach (var m in matches)
         {
-            // Prefer constructors. SymbolInfo.Kind comes from ISymbol.Kind.ToString(); a constructor is Kind == "Method"
-            // with ContainingType-named method (".ctor"). We expose any method whose ContainingType is the consumer.
+            // Constructors only. Any method taking the service type used to qualify, which made
+            // every helper/extension that happens to accept an IFoo look like a DI consumer.
+            // Roslyn names instance constructors ".ctor" and static ones ".cctor"; both come
+            // back as Kind "Method", so the name is the discriminator.
+            if (m.Name is not ".ctor") continue;
             if (m.ContainingType is null || !seen.Add(m.ContainingType)) continue;
             yield return new DiConsumer(m.ContainingType, m.PrimaryLocation);
         }

@@ -34,6 +34,10 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
   Deferred until there's a real non-Windows user. `MSBuildLocator` and path-comparison code would both need attention.
 - [ ] **TOOL-005: Wider `semantic_search` grammar.** (ID: 1185)
   Current 5 patterns (`derives-from:`, `implements:`, `has-attribute:`, `returns:`, `parameter-type:`) are a starting set. Add based on observed gaps in real sessions rather than speculatively.
+
+  Reviewed 2026-08-15 while clearing the other TOOL cards and deliberately left closed. Nothing in the BPG work wanted
+  a pattern that isn't there — the gaps that did show up were in `find_dead_code_candidates` (see TOOL-006), not in the
+  search grammar. Reassess after VAL-001.
 - [ ] **ARCH-001: `ISymbolProvider` abstraction.** (ID: 1186)
   If we ever wrap gopls/pyright/rust-analyzer, factor `WorkspaceService` behind a more abstract provider interface. Don't build it speculatively — one implementation needs no interface.
 
@@ -65,35 +69,80 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
 
 - [ ] **IDX-001: `SymbolIndex.AllSymbols()` not in dirty-walk.** (ID: 1178)
   Could return stale data after edits. Low-impact for `find_dead_code_candidates` (a run-occasionally tool); revisit if observed in practice.
-- [ ] **TOOL-003: `find_dead_code_candidates` `Skipped` counters truncate when `maxResults` hits.** (ID: 1177)
-  Minor stats inaccuracy when the result set is large; document or fix in v1.4.
-- [ ] **TOOL-002: `find_registrations` consumer detection over-broad.** (ID: 1176)
-  Currently returns any method with the parameter type; tighten to `MethodKind == Constructor` for higher signal in v1.4.
-- [ ] **TOOL-001: `project_overview.TargetFramework` is always `null`.** (ID: 1175)
-  Needs .csproj XML parsing. Planned for v1.4.
+- [x] ~~**TOOL-003: `find_dead_code_candidates` `Skipped` counters truncate when `maxResults` hits.**~~ (ID: 1177)
+  Done 2026-08-15. The scan used to `break` at `maxResults`, so the counters described only the prefix it had walked.
+  It now keeps classifying and stops only the expensive reference scans, and the result carries a new `Truncated: bool`
+  so a caller can tell a complete sweep from a capped one. Cost was the worry and it was unfounded: a complete scan of
+  `BPG.sln` runs in ~1.5–2.5 s. Regression test compares `maxResults: 1` against `maxResults: 1000` and requires every
+  counter to match.
+- [x] ~~**TOOL-002: `find_registrations` consumer detection over-broad.**~~ (ID: 1176)
+  Done 2026-08-15. `LikelyConsumers` now lists constructors only — `ISymbol.Name == ".ctor"`, which also covers primary
+  constructors. Any method with a parameter of the service type used to qualify. New fixture `TestWeb/FooHelper.cs`
+  declares `Use(IFoo)` as a plain method; the test asserts it is absent while `BarController` is still listed.
+- [x] ~~**TOOL-001: `project_overview.TargetFramework` is always `null`.**~~ (ID: 1175)
+  Done 2026-08-15. `project_overview` reads `<TargetFramework>` (falling back to `<TargetFrameworks>`) and
+  `<IsPackable>` from the .csproj it already parses for package references — one `XDocument.Load` instead of two.
+  A multi-targeted project takes its TFM from the `Foo(net8.0)` suffix MSBuildWorkspace puts on the project name,
+  which is the only place a per-`Project` TFM exists. A value still holding an MSBuild variable reports as `null`
+  rather than being echoed back as if it were a framework name; resolving those means evaluating MSBuild, which no
+  real solution has yet needed. Verified on `BPG.sln`: all 8 projects report `net10.0`, the two test projects report
+  `IsPackable=false`, the rest `null` (the tool reports what the file says and does not guess SDK defaults).
 - [ ] **TOOL-004: `find_entrypoints` hosted-service de-dup pivot.** (ID: 1181)
   Tool layer collapses "registered" + "subclass" entries for the same type. If duetGPT acceptance shows agents want both visible, expose a flag. Conditional on real-session feedback — don't build speculatively.
+
+  Reviewed 2026-08-15 while clearing the other TOOL cards and deliberately left closed. The BPG work produced no case
+  where the collapsed entry misled anyone, so there is still nothing to build against. Reassess after VAL-001.
 - [x] ~~**TEST-002: `HoverToolTests.cs` line 19 stale comment.**~~ (ID: 1180) Done 2026-08-02. The comment quoted `$"Hello, {name}!"` while the fixture reads `$"Hello, {name.Trim()}!"`. The column-19 arithmetic in the same comment was re-checked and is correct.
 - [x] ~~**TEST-001: Strengthen `find_dead_code_candidates` test 3.**~~ (ID: 1179) Done 2026-08-02. `Skipped_counters_report_publicMembers_and_tests` now asserts both counters are non-zero (fixture yields `PublicMembers` 148, `Tests` 6) and that what they claim to exclude is absent from `Candidates`. Verified non-vacuous by inverting each assertion to `Be(0)` and confirming it fails — the old `Should().NotBeNull()` passed even with both counters stuck at zero.
 
 ## Spotted in real-session use (BPG, 2026-08-15)
 
-- [ ] **TOOL-006: `find_dead_code_candidates` misses unreferenced public types — the case that actually matters.** (ID: 1309)
-  The tool skips the public surface by design. On a real application solution that filters out the only dead code anyone would act on, and leaves the noise behind.
+- [x] ~~**TOOL-006: `find_dead_code_candidates` misses unreferenced public types — the case that actually matters.**~~ (ID: 1309)
+  Done 2026-08-15. Shipped as `includePublicTypes` (default `false`, so nothing changes for existing callers). When set,
+  public **types** — never public members — are reported when they have no reference outside their own declaration.
+  "Outside their own declaration" is span-level, not file-level, so two types sharing a file don't mask each other, and
+  `BPGDbInitializer`'s self-reference (`ILogger<BPGDbInitializer>` inside its own body) doesn't count as use.
 
-  Evidence, `C:\Projects\BPG\BPG.sln`, `maxResults: 18, includeTests: false`: every result was compiler-generated record plumbing (`EqualityContract`, `PrintMembers`, copy-constructors across four records) or a private backing field. Reported `skipped: { publicMembers: 214 }`.
+  Verified end-to-end against `C:\Projects\BPG` — the solution the card was filed from. Both known-dead classes,
+  `CodeGenerationService` and `CodeGenerationServiceV2`, are now reported. The complete public sweep returns 11
+  candidates: those two, six `Class1` template leftovers, `BPGDbInitializer` (confirmed dead by grep — its only mention
+  is inside itself), and three BPG.Api types worth a look. No migrations, no controllers, no record plumbing.
 
-  Meanwhile BPG contains two entirely dead **public** classes the tool cannot see: `BPG.CodeGeneration.Services.CodeGenerationService` and `CodeGenerationServiceV2`. Both implement `ICodeGenerationService`, neither is DI-registered, neither is referenced anywhere outside itself. They were found with `grep`, by accident, while chasing an unrelated bug — and `CodeGenerationServiceV2` was still being edited as if it were live.
+  Four suppressions make that signal-to-noise possible, and three of them were only found by running against BPG:
+  - **DI cross-reference**, as the card suggested — registrations, hosted services, and the raw text of `unclassified`
+    calls. It suppressed 45 types on BPG. One trap: matching raw call text by substring is wrong, because
+    `CodeGenerationService` occurs inside every mention of `ICodeGenerationService` — the registered interface would
+    have exonerated the dead class named after it, defeating the card's own headline case. Matching is whole-identifier.
+  - **Compiler-generated members are now skipped entirely** (`ISymbol.IsImplicitlyDeclared`). This is the direct fix for
+    the card's complaint that every result was record plumbing: `EqualityContract`, `PrintMembers`, copy-constructors,
+    backing fields. On BPG that is 715 members that no one can delete.
+  - **Framework-reached types**: `Controller`/`Hub`/`Middleware`/`Migration`/`Startup`/`Program` suffixes, plus static
+    classes declaring extension methods (reached through the method, never the class). EF migrations are matched by
+    `[Migration]`/`[DbContext]` instead — BPG's are named `AddMessageEmbeddings`, so no suffix rule would catch them.
+  - **De-duplication by symbol id.** A project reference pulls the referenced project's source symbols into the
+    referencing compilation, so `SymbolIndex` holds one entry per referencing project. Every candidate was reported
+    once per referencing project and every `Skipped` counter was inflated — on BPG, `publicMembers` 17817 vs the real
+    3113. This is the same class of bug as the v1.3 `find_references`/`find_implementations` dedup fix.
 
-  Skipping public members is right for a **packable library**, where the public surface is the product. It is wrong for an **application solution** (web app + tests, nothing packable), which is most of what this server gets pointed at.
+  Public-type findings are reported at **medium** confidence with reason
+  `public-type-no-references-outside-own-declaration-and-not-di-registered`. The residual risk is unchanged: assembly
+  scanning (Scrutor) and config-named types remain invisible to both a reference scan and the DI index.
 
-  Suggested shape — opt-in, not a default change: `includePublicTypes: false` keeps today's behaviour; `includePublicTypes: true` reports public types with zero references outside their own declaration.
+  **`IsPackable` is reported, not acted on** (see TOOL-001). The card suggested skipping public types in packable
+  projects; that would have broken the feature on the very solution it was filed from. BPG declares `IsPackable` only
+  on its two test projects, so the libraries — including `BPG.CodeGeneration`, which holds both dead classes — default
+  to packable and would all have been skipped. Surfacing the value and letting the caller decide is the honest version.
 
-  The false-positive risk is the whole design problem: plenty of public types are reached only by reflection or container resolution and never by a symbol reference — DI-registered implementations (BPG hand-registers its `ICodeGenerator` implementations), controllers, hubs, `IHostedService`, EF entities reached via `DbSet<T>`, test fixtures, and types named in config or templates rather than code.
+  Also done here: `project_overview`'s `.esproj` diagnostic no longer reads as a `Failure`. `WorkspaceService` classifies
+  "…is not associated with a language" as kind `SkippedUnsupportedProject`, which is what a polyglot solution actually
+  means. Confirmed on BPG's `bpg-frontend.esproj`.
 
-  **The mitigation already exists in this server:** cross-reference candidates against `find_registrations` (including its `unclassified` raw calls) and suppress anything that appears there. "Neither referenced nor registered" is a strong signal; that combination is what makes the feature worth shipping instead of a noise generator. Consider also reporting per-project `IsPackable` so public types can be skipped in anything genuinely packaged.
-
-  Also worth fixing while here: `project_overview` emits a `Failure` diagnostic for `.esproj` (JS/TS) projects — *"Cannot open project … because the file extension '.esproj' is not associated with a language."* Expected in a polyglot solution, but it reads as a real error. Downgrade to Info or classify as `Skipped`.
+  Original report (2026-08-15, BPG session): with `maxResults: 18, includeTests: false` every result was
+  compiler-generated record plumbing or a private backing field, reported alongside `skipped: { publicMembers: 214 }`,
+  while two entirely dead public classes — `CodeGenerationService` and `CodeGenerationServiceV2` — were invisible to the
+  tool and were eventually found with `grep`, by accident, with `CodeGenerationServiceV2` still being edited as if live.
+  Skipping the public surface is right for a packable library, where that surface is the product; it is wrong for an
+  application solution, which is most of what this server gets pointed at.
 
 ## Real-session validation (still to do)
 
