@@ -9,4 +9,11 @@ namespace mcpRoslyn.Contracts;
 /// Distinct from <see cref="Microsoft.CodeAnalysis.WorkspaceDiagnostic"/> (which is Roslyn's internal type) —
 /// this is the serializable DTO the MCP server returns to callers.
 /// </summary>
-public sealed record WorkspaceLoadDiagnostic(string Kind, string Message);
+/// <param name="ProjectName">
+/// The project the message is about, without extension (e.g. <c>duetGPT.LicenseServer</c>), pulled
+/// out of the quoted path MSBuild embeds in the text. Null when no project path is quoted.
+/// Note this does NOT imply the project failed to load — MSBuild reports package-pruning and
+/// vulnerability advisories through the same channel, at kind <c>Failure</c>, for projects that
+/// load perfectly well.
+/// </param>
+public sealed record WorkspaceLoadDiagnostic(string Kind, string Message, string? ProjectName = null);

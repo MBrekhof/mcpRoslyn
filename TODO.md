@@ -61,18 +61,31 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
 
 ## Nice-to-haves spotted along the way
 
-- [ ] **WS-003: Extract project name from `WorkspaceLoadDiagnostic.Message`.** (ID: 1174)
-  Currently the DTO is `{ Kind, Message }`; the project filename is embedded in the message text. Adding a `ProjectName: string?` field (regex-extracted from the message) would make filtering/grouping easier for tool callers. Small, safe.
+- [x] ~~**WS-003: Extract project name from `WorkspaceLoadDiagnostic.Message`.**~~ (ID: 1174)
+  Done 2026-08-15. The DTO is now `{ Kind, Message, ProjectName }`. MSBuild quotes the offending project's full path in
+  both wordings we actually see — `Cannot open project '…\bpg-frontend.esproj' because…` and `Msbuild failed when
+  processing the file '…\duetGPT.csproj' with message: …` — so one regex covers both; the name is returned without
+  extension, matching `project_overview`'s `Name` so callers can join the two. Table-driven test uses both real
+  messages plus a no-path case; the `.esproj` message also quotes the bare extension `'.esproj'`, which must not win
+  over the full path, and the test pins that.
 - [x] ~~**WS-002: Fix the `Workspace.WorkspaceFailed` obsolete warning.**~~ (ID: 1173)
   Done 2026-08-15. Migrated to `RegisterWorkspaceFailedHandler(Action<WorkspaceDiagnosticEventArgs>)`; the src project
   now builds with **0 warnings**. The risk with this change is that it compiles clean and silently never fires, so it
   was checked behaviourally, not just by the warning disappearing: `LoadAsync_broken_solution_captures_diagnostics`
   still captures diagnostics, and a new test loads a solution naming a `.esproj` and asserts the diagnostic arrives
   classified as `SkippedUnsupportedProject` (which also gives TOOL-006's `.esproj` change its first in-repo coverage).
-- [ ] **WS-001: Investigate `duetGPT.LicenseServer` silent drop.** (ID: 1172)
-  v2.0 of duetGPT's .sln declares 5 projects; MSBuildWorkspace consistently loads 4. `duetGPT.LicenseServer` is filtered out *before* MSBuild raises a `WorkspaceFailed` event, so the v1.1 diagnostics-surfacing work (`WorkspaceLoadDiagnostic`) doesn't catch it — verified in v1.2 acceptance ([`docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md`](docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md)).
+- [x] ~~**WS-001: Investigate `duetGPT.LicenseServer` silent drop.**~~ (ID: 1172)
+  Closed 2026-08-15 — **does not reproduce; the premise is gone.** The original observation was against
+  `duetGPT\duetGPT.sln`, which after the 2026-07-30 repo flatten declares exactly **one** project. The live solution is
+  now the repo root `C:\Projects\duetgpt\duetGPT.sln`, which declares 4, and mcpRoslyn loads **4 of 4** —
+  `duetGPT.LicenseServer` among them, and it is in fact the first project to finish warming (2293 ms, 22 diagnostics).
+  Its .csproj is unremarkable: `Microsoft.NET.Sdk.Web`, `net10.0`, four package references.
 
-  Likely an SDK / target-framework / project-type filter applied at workspace open. Start by inspecting that project's .csproj for `<Sdk>` reference / target framework / project type GUID, then check Roslyn's `MSBuildWorkspace.OpenSolutionAsync` source for what it skips silently. May need a separate `list_solution_projects` tool that reads the .sln/.slnx directly to surface declared-but-unloaded entries.
+  So there is nothing left to investigate here, and no evidence for the suspected pre-`WorkspaceFailed` project filter.
+  The speculative `list_solution_projects` tool is not worth building for a symptom that no longer exists; if a
+  declared-but-unloaded project turns up again, reopen with the new solution as the repro.
+
+  What the same run *did* surface is a different reporting problem, filed separately as WS-004.
 - [x] ~~**Re-measure `find_implementations` on duetGPT.**~~ Resolved in v1.2 acceptance ([`docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md`](docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md)): 321 ms in v1.2, matches v1 (~300 ms). v1.1's 832 ms was sampling noise.
 
 ## v1.3 items (all closed)
@@ -174,6 +187,22 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
   tool and were eventually found with `grep`, by accident, with `CodeGenerationServiceV2` still being edited as if live.
   Skipping the public surface is right for a packable library, where that surface is the product; it is wrong for an
   application solution, which is most of what this server gets pointed at.
+
+## Spotted while closing WS-001 (2026-08-15)
+
+- [ ] **WS-004: MSBuild non-fatal messages are reported at kind `Failure` on projects that load fine.** (ID: 1310)
+  Loading `C:\Projects\duetgpt\duetGPT.sln` (4 projects, **all 4 loaded**) emits three `Failure` diagnostics: two
+  package-pruning suggestions on `duetGPT.csproj` and a vulnerability advisory on `duetGPT.Tests.csproj`. None of them
+  stopped anything loading, but `Kind` is `Failure` and the text opens with "Msbuild failed", so the diagnostics list
+  reads as a broken solution when nothing is broken. Same readability problem TOOL-006 raised for `.esproj`.
+
+  Cheap now that WS-003 shipped `ProjectName`: after `OpenSolutionAsync` returns, a diagnostic naming a project that
+  IS in `solution.Projects` demonstrably did not prevent loading, so it can be reclassified (e.g.
+  `ProjectLoadedWithWarnings`); one naming an absent project stays a real `Failure` — which is also the honest signal
+  for the declared-but-unloaded case WS-001 was originally chasing.
+
+  Ordering constraint: diagnostics arrive during the load, before the final project list exists, so this is a
+  post-processing pass at the end of `LoadUnsafeAsync`, not a decision inside the handler.
 
 ## Real-session validation (still to do)
 

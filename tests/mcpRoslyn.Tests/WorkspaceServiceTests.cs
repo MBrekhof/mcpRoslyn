@@ -140,6 +140,18 @@ public class WorkspaceServiceTests
         }
     }
 
+    // Both real MSBuild wordings seen against BPG and duetGPT, plus the no-path case. The .esproj
+    // message quotes the bare extension too ('.esproj'), which must not win over the full path.
+    [TestCase(
+        @"Cannot open project 'C:\Projects\BPG\src\bpg-frontend\bpg-frontend.esproj' because the file extension '.esproj' is not associated with a language.",
+        "bpg-frontend")]
+    [TestCase(
+        @"Msbuild failed when processing the file 'C:\Projects\duetgpt\duetGPT\duetGPT.csproj' with message: PackageReference System.Text.Json will not be pruned.",
+        "duetGPT")]
+    [TestCase("Solution file could not be read", null)]
+    public void ExtractProjectName_takes_the_name_from_the_quoted_project_path(string message, string? expected)
+        => WorkspaceService.ExtractProjectName(message).Should().Be(expected);
+
     [Test]
     public async Task Project_with_no_Roslyn_language_is_classified_not_reported_as_a_failure()
     {
@@ -162,6 +174,7 @@ public class WorkspaceServiceTests
 
             sut.Diagnostics.Should().Contain(d => d.Kind == "SkippedUnsupportedProject");
             sut.Diagnostics.Should().NotContain(d => d.Kind == "Failure");
+            sut.Diagnostics.Should().Contain(d => d.ProjectName == "Frontend");
         }
         finally
         {

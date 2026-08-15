@@ -85,6 +85,24 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     }
 
     /// <summary>
+    /// MSBuild quotes the offending project's full path in its message, in both wordings we see:
+    /// "Cannot open project '…\bpg-frontend.esproj' because…" and
+    /// "Msbuild failed when processing the file '…\duetGPT.csproj' with message: …".
+    /// Pull the project name out so callers can filter/group without parsing prose (WS-003).
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex ProjectPathInMessage =
+        new(@"'([^']+\.[A-Za-z]*proj)'", System.Text.RegularExpressions.RegexOptions.Compiled
+                                       | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    internal static string? ExtractProjectName(string message)
+    {
+        var match = ProjectPathInMessage.Match(message);
+        if (!match.Success) return null;
+        var name = Path.GetFileNameWithoutExtension(match.Groups[1].Value);
+        return string.IsNullOrEmpty(name) ? null : name;
+    }
+
+    /// <summary>
     /// MSBuild's wording when a solution names a project whose extension has no Roslyn language:
     /// "Cannot open project '…' because the file extension '.esproj' is not associated with a language."
     /// </summary>
@@ -108,7 +126,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
             var kind = IsUnsupportedProjectLanguage(e.Diagnostic.Message)
                 ? "SkippedUnsupportedProject"
                 : e.Diagnostic.Kind.ToString();
-            var diag = new WorkspaceLoadDiagnostic(kind, e.Diagnostic.Message);
+            var diag = new WorkspaceLoadDiagnostic(kind, e.Diagnostic.Message, ExtractProjectName(e.Diagnostic.Message));
             lock (_diagnosticsLock) _diagnostics.Add(diag);
             log.LogWarning("MSBuild workspace event: {Kind} {Message}", kind, e.Diagnostic.Message);
         });
