@@ -46,13 +46,17 @@ Queries hit the dictionary in O(matches). Always-fresh semantics are preserved v
 
 `SymbolIndex` is reconstructed (dirty set discarded) on `ReloadAsync`. The class is `public sealed` because it's exposed on the public `IWorkspaceService` interface, but consumers should treat it as an implementation detail of `semantic_search`.
 
+The build walks **`compilation.Assembly.GlobalNamespace`, not `compilation.GlobalNamespace`** — the latter merges every referenced assembly, so the walk covered the entire BCL and every package before discarding the results (a symbol with no source-declaring document is dropped). Using the wrong root cost ~20–27× for an identical index; see PERF-001. It also meant each symbol was indexed once per *referencing* project, since a project reference brings the referenced project's source symbols into the referencing compilation.
+
+`AllSymbols(solution, ct)` — the flat enumeration behind `find_dead_code_candidates` — goes through the same `MergeWithDirtyWalk` as the pattern queries, so it sees post-build edits and returns symbol-id-deduplicated results. It takes the current `Solution` for that reason; there is no parameterless overload.
+
 ### InvocationIndex
 
 A sibling `InvocationIndex` (built during warm-up, owned by `WorkspaceService`, exposed via `IWorkspaceService.InvocationIndex`) backs `find_entrypoints` and `find_registrations`. It walks `InvocationExpressionSyntax` in each project's syntax trees, classifying calls into four buckets: routes (`MapGet`/`MapPost`/...), middleware (`Use*` on `IApplicationBuilder`/`WebApplication`), hosted services (`AddHostedService<T>` + `BackgroundService` subclasses), DI registrations (`AddSingleton`/`AddTransient`/`AddScoped` + an `Unclassified[]` bucket for `IServiceCollection` extension calls that don't match the known forms).
 
 Detection is syntactic — agents stay informed of unrecognised DI surface via the `Unclassified[]` array. Lifecycle and dirty-doc handling mirror `SymbolIndex`. Reconstructed on `ReloadAsync`.
 
-## Tool surface (19 tools)
+## Tool surface (20 tools, plus `echo`)
 
 Every tool returns structured JSON wrapped in `ToolResult<T>` (`Result` or `Error`). Locations use 1-based line/column. Symbol identifiers use Roslyn's `DocumentationCommentId` format. Navigation tools accept either `{ filePath, line, column }` or `{ symbolId }`.
 

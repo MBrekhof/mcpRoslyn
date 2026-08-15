@@ -2,7 +2,7 @@
 
 MCP server exposing C# symbol-level navigation (find-references, goto-definition, find-implementations, semantic-search, rename, etc.) to AI coding agents. Wraps Roslyn's `MSBuildWorkspace` and serves over stdio.
 
-**Status:** v1.1 — warm-up pre-compilation shipped (4.5× faster first query on production-sized solutions). See [`docs/acceptance/`](docs/acceptance/) for measured timings. v1 design at [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md). High-level architecture summary at [`ARCHITECTURE.md`](ARCHITECTURE.md). Open work tracked in [`TODO.md`](TODO.md).
+**Status:** v1.3 — feature expansion shipped and tagged `v1.3.0`, with post-tag fixes on top of it. 20 tools plus `echo`, 123 tests. See [`docs/acceptance/`](docs/acceptance/) for measured timings. v1 design at [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md). High-level architecture summary at [`ARCHITECTURE.md`](ARCHITECTURE.md). Open work tracked in [`TODO.md`](TODO.md).
 
 ## Why
 
@@ -14,20 +14,46 @@ AI coding agents (Claude Code, Cursor, etc.) typically navigate codebases with t
 - **.NET 10 SDK** (for build) — runtime is bundled into the published self-contained exe.
 - A Claude Code installation (or any MCP-compatible client speaking stdio JSON-RPC).
 
-## Tools (13)
+## Tools (20, plus `echo`)
 
 | Category | Tools |
 |---|---|
 | Navigation | `find_references`, `goto_definition`, `workspace_symbol`, `hover` |
 | Structure | `find_implementations`, `find_derived_types`, `list_document_symbols` |
-| Callers | `find_callers` |
+| Callers / Callees | `find_callers`, `find_callees` |
 | Diagnostics | `get_compilation_errors`, `get_document_diagnostics` |
 | Search | `semantic_search` (patterns: `derives-from:`, `implements:`, `has-attribute:`, `returns:`, `parameter-type:`) |
+| Composite | `analyze_symbol` (hover + refs + impls + derived + callers in one call) |
+| Architecture | `project_overview`, `find_entrypoints`, `find_registrations` |
+| Tests | `test_map` (production → test heuristic) |
+| Cleanup | `find_dead_code_candidates` |
 | Editing | `rename_symbol` (preview by default; `applyEdits: true` to write) |
 | Lifecycle | `reload_workspace` |
 | Sanity | `echo` |
 
-Every tool returns structured JSON. Navigation tools accept either `{ filePath, line, column }` (cursor style) or `{ symbolId }` (Roslyn's `DocumentationCommentId` format). `rename_symbol` is the **only** path to file writes — default `applyEdits: false` returns a preview.
+Every tool returns structured JSON and accepts `format = "structured" | "summary"`. Navigation tools accept either `{ filePath, line, column }` (cursor style) or `{ symbolId }` (Roslyn's `DocumentationCommentId` format). `rename_symbol` is the **only** path to file writes — default `applyEdits: false` returns a preview.
+
+### Finding dead code
+
+`find_dead_code_candidates` reports private/internal members with no references. On an **application** solution (a web app plus tests — nothing packaged), pass `includePublicTypes: true`:
+
+```json
+{ "includePublicTypes": true, "includeTests": false }
+```
+
+Public *members* are never candidates — outside callers can reach them in ways a reference scan can't see. Public **types** in an application are a different matter: nothing outside the solution can reach them, so an unreferenced one is usually dead, and it is the case worth acting on. Left off by default because it is exactly the wrong behaviour for a packable library, where the public surface *is* the product.
+
+Findings are filtered against the things a reference scan can't see on its own: DI registrations (including hosted services and unrecognised registration calls), framework-reached types (controllers, hubs, middleware, EF migrations), and compiler-generated members. Public-type findings are reported at **medium** confidence — a type resolved only by assembly scanning (Scrutor) or named in configuration has no code reference anywhere, so confirm before deleting.
+
+### Workspace diagnostics
+
+`reload_workspace` and `project_overview` return `WorkspaceLoadDiagnostic { Kind, Message, ProjectName }`. `Kind` distinguishes three situations that MSBuild reports through one channel:
+
+| Kind | Meaning |
+|---|---|
+| `Failure` | The project genuinely did not load. |
+| `ProjectLoadedWithWarnings` | It loaded fine; MSBuild grumbled about package pruning, a vulnerability advisory, etc. |
+| `SkippedUnsupportedProject` | Not a C#/VB project (`.esproj`, `.sqlproj`, …). Expected in a polyglot solution. |
 
 ## Wiring into Claude Code
 
@@ -93,6 +119,17 @@ On `duetGPT.sln` (4 loaded projects, 598 .cs files), measured cold-start and que
 | `semantic_search has-attribute:` | ~11 s | ~7.7 s | **~11 ms** (1000× faster) |
 
 All warm-up cost stays in the background — `LoadAsync` returns at the same time. Full detail in [`docs/acceptance/`](docs/acceptance/).
+
+**Index build costs, re-measured 2026-08-15** (published exe, cold process):
+
+| Solution | Projects | `SymbolIndex` | `InvocationIndex` |
+|---|---|---|---|
+| `BPG.sln` | 8 | 128 ms | 1 715 ms |
+| `duetGPT.sln` | 4 | ~400 ms | ~12 200 ms |
+
+`SymbolIndex` used to dominate this list; it was walking every referenced assembly (the whole BCL, every package) and discarding the result. Fixing the walk root cut it ~20–27× with an identical index — so `InvocationIndex` is now the only meaningful index cost.
+
+The table above is **not** comparable to the v1/v1.1/v1.2 columns: those were measured against a `duetGPT.sln` that has since been restructured, and query timings there were taken on a different solution shape. Treat the version columns as history, not as a baseline to diff against.
 
 ## License
 
