@@ -1,14 +1,69 @@
 # Session Handoff
 
-**Last updated:** 2026-08-02 (issue #1 closed out, ContextBoard wired up, TEST-001/002 shipped)
+**Last updated:** 2026-08-15 (all TOOL cards and all bug cards closed; no open GitHub issues)
+
+## What the 2026-08-15 session did
+
+Ran as a `/loop`: TOOL cards first, then bugs. **Both lanes are now empty.** Five commits, `0b3118e` → `3f39b3d`.
+`C:\Projects\BPG` was the test solution throughout, and it earned that role — three of the four dead-code suppressions
+below were only discovered by running against it, not by reading the code.
+
+**Closed: TOOL-001, TOOL-002, TOOL-003, TOOL-006, WS-001, WS-002, WS-003, IDX-001, PERF-001, plus WS-004 which this
+session filed and fixed.** GitHub **#5 is closed**, leaving **no open issues**. Tests **111 → 123**, all passing; the
+src project now builds with **0 warnings**.
+
+### The two findings worth remembering
+
+**1. `SymbolIndex` walked the entire BCL on every project (PERF-001 / #5).** `WalkAllSymbols` started at
+`Compilation.GlobalNamespace`, which merges the source assembly with *every referenced assembly* — then discarded all
+of it, because a symbol with no source-declaring document is dropped a few lines later. One-word fix to
+`compilation.Assembly.GlobalNamespace`. Interleaved in-process A/B with `InvocationIndex` as the control: BPG
+2323/1852 ms → 117/96 ms, duetGPT 2214 ms → 76/82 ms, **identical entry counts** (4 910 / 12 620) — the load-bearing
+number, since it proves ~20–27× came free. Cold through the published exe: 128 ms on BPG, 198 ms on duetGPT.
+
+Two corrections went onto #5. Its "~7.2 s" headline **cannot be reproduced as stated**: it was measured when
+`duetGPT.sln` declared 4–5 projects, and after the 2026-07-30 repo flatten `duetGPT\duetGPT.sln` declares **1**. Use
+the repo-root `C:\Projects\duetgpt\duetGPT.sln` (4 projects) or BPG (8) as benchmarks now. And **`InvocationIndex` is
+now the dominant index cost** — 1715 ms on BPG, 12 205 ms on duetGPT — i.e. #1's residual generic-DI bind work.
+
+**2. The same misrooted walk was inflating everything downstream.** A project reference pulls the referenced project's
+source symbols into the referencing compilation, so each symbol was indexed once per *referencing* project.
+`find_dead_code_candidates` reported candidates several times over and its counters were inflated —
+`publicMembers` 17817 against a real 3113 on BPG. De-duplication now lives in `SymbolIndex.MergeWithDirtyWalk`
+(IDX-001), which is also where the dirty-walk fix landed.
+
+### `find_dead_code_candidates` is now worth pointing at an application solution (TOOL-006)
+
+`includePublicTypes: true` (default `false`) reports public **types** with no reference outside their own declaration.
+On BPG it returns 11 candidates — including both classes the card was filed about — with no migrations, no controllers,
+no record plumbing. Four suppressions make that work, and the design notes are in `TODO.md`; the two that would be
+easiest to accidentally undo:
+
+- **DI raw-call matching is whole-identifier, not substring.** `CodeGenerationService` occurs inside every mention of
+  `ICodeGenerationService`, so substring matching lets the registered interface exonerate the dead class named after
+  it — precisely the case the card exists to catch.
+- **`IsPackable` is reported but deliberately NOT acted on.** The card suggested skipping public types in packable
+  projects; that would have broken the feature on the solution it was filed from, since BPG declares `IsPackable` only
+  on its test projects and `BPG.CodeGeneration` (which holds both dead classes) therefore defaults to packable.
+
+### Method note
+
+Every new assertion was checked for non-vacuity by inverting the guard it covers and confirming **only** that test
+fails — the same discipline TEST-001 used. Worth keeping: two of this session's fixes (the ctor filter, the dirty-walk)
+would have passed a naive test unchanged.
 
 ## Where things stand
 
-- **`main` HEAD is `104331e`** (TEST-001/TEST-002) — committed and pushed to origin. Four commits this session: `b088afe` (#1 close-out + measurement), `d698555` (board wiring), `759e89d` (AREA-NNN prefixes), `104331e` (the two test fixes).
-- **v1.3 IS LIVE ON MAIN and TAGGED.** `v1.3.0` annotated tag points at merge commit `33d8ad4`. Post-tag patches (dedup fixes, downward discovery, the #1 perf fix) sit on top of the tag.
-- **Published exe is CURRENT.** Republished 2026-08-02 22:09 — `bin/publish/mcpRoslyn.exe` now carries the #1 perf fix. (Republish command: `dotnet publish src/mcpRoslyn -c Release -o bin/publish`; stop running mcpRoslyn.exe instances first — they hold the file lock.)
+- **`main` HEAD is `3f39b3d`.** Five commits on 2026-08-15: `0b3118e` (TOOL-001/002/003/006), `fb63995` (WS-002,
+  IDX-001), `5c3bfe2` (PERF-001 / #5), `1bf5065` (WS-003, WS-001 closed, WS-004 filed), `3f39b3d` (WS-004 fixed).
+- **123 tests pass**, 0 failing. 1 acceptance test `[Explicit]`. `dotnet build` on src is **warning-free**.
+- **No open GitHub issues.** #5 closed 2026-08-15 with the measurement above.
+- **Published exe is CURRENT** — republished 2026-08-15 09:47 after the last src change.
+- **v1.3 IS LIVE ON MAIN and TAGGED.** `v1.3.0` annotated tag points at merge commit `33d8ad4`. Everything since —
+  the dedup fixes, downward discovery, the #1 perf fix, and all of 2026-08-15 — sits on top of the tag, untagged.
+  Republish command: `dotnet publish src/mcpRoslyn -c Release -o bin/publish` (stop running `mcpRoslyn.exe` first —
+  they hold the file lock).
 - **Issue #1 is CLOSED.** Commented with root cause + live measurement.
-- Branch `feat/v1.3-feature-expansion` no longer exists on origin (delete attempt returned "remote ref does not exist"). Nothing to clean up.
 - Working tree on main is clean.
 
 ## What the 2026-08-02 session did
@@ -100,21 +155,49 @@ The v1.3 acceptance compared v1.2 in-process timings against v1.3 published-exe 
 
 ## What's next when you return
 
-**Everything is in Backlog except the two closed TEST cards** — the board was deliberately cleared to Backlog, so pick one and move it to Todo rather than assuming a queue exists.
+**Every actionable card is closed.** What remains is one real piece of work and a set of items whose own bodies say
+"don't build this speculatively":
 
-1. **VAL-001 (card 1171) — real-session validation.** Recommended first, because **three other cards are explicitly gated on it** and can't be answered without it: TOOL-004 (*"if duetGPT acceptance shows agents want both visible"*), TOOL-005 (*"add based on observed gaps in real sessions"*), DIST-002 (*"re-evaluate once session data shows…"*). Doing it first either unblocks those with evidence or kills them. Needs a real duetGPT session with the MCP server connected, and its deliverable is written findings, not code — worth deciding the output shape up front so it doesn't drift into unstructured poking. Consider recording those three as real `add_dependency` links so the ordering isn't buried in card prose.
-2. **PERF-001 (card 1170) — SymbolIndex warm-up (~7.2 s), GitHub [#5](https://github.com/MBrekhof/mcpRoslyn/issues/5).** The only open GitHub issue. Deliberately *not* recommended first: it's ~7.2 s of a ~24 s once-per-session cost, so even a 2× win saves ~3.6 s, and we don't yet know whether startup latency is what actually hurts in practice — VAL-001 is what would tell us. Measure before optimizing.
-3. **WS-002 (card 1173)** is the best quick win at ~0.5 h: removes the CS0618 `WorkspaceFailed` warning that fires on every single build.
-4. Remaining v1.4 items are all carded in Backlog with bodies — see the board or `TODO.md`.
-4. **`gh` account gotcha:** active account is `MBrekhof` (has push access to this repo). If a push 403s, run `gh auth switch --user MBrekhof` — `MartinWLN` can't push here.
-5. **Republish the exe after any src change** — live Claude Code sessions run `bin/publish/mcpRoslyn.exe`, not your build output, so a fix is invisible to them until republished. Stop running instances first (they hold the lock); this also drops the MCP server out of the current session until it restarts.
+1. **VAL-001 (card 1171) — real-session validation.** Now clearly the top item, and **two cards are still gated on it**:
+   TOOL-004 and TOOL-005. Both were reviewed on 2026-08-15 and deliberately left open — the BPG work produced no
+   evidence for either, so building them would be guessing. VAL-001 needs a *feature-sized* task in a real repo with
+   the MCP server connected, and its deliverable is written findings, not code.
+
+   The BPG session already contributed a partial data point worth building on (recorded under VAL-001 in `TODO.md`):
+   the tools were available all session and went unused until prompted, **because grep is the reflex**. That is a
+   usability finding about adoption rather than about the tool surface, and it is probably the most important thing
+   VAL-001 should be designed to measure.
+
+2. **`InvocationIndex` is now the only remaining perf target** — 12 205 ms on duetGPT, 1715 ms on BPG, against
+   `SymbolIndex`'s ~0.1–0.4 s after PERF-001. This is #1's residual: ~1 440 generic DI calls (`AddDbContext<T>`,
+   DevExpress/EF) that are genuinely expensive to bind. **Not currently carded.** If it gets picked up, measure first —
+   #1's original suspect (`WalkTypes`) was a 133 ms red herring, and PERF-001's real cause turned out to be the walk
+   root rather than anything per-symbol.
+
+3. **DIST-001/002/003 and ARCH-001 stay deferred** — each says so in its own body (needs a feed / needs session data /
+   needs a non-Windows user / one implementation needs no interface).
+
+**If you benchmark anything here, use an in-process control.** This machine's raw timings swing ±35% on no code change;
+every measurement this session was read as a ratio against `InvocationIndex` building moments later.
+### Operational notes (unchanged, still true)
+
+- **`gh` account gotcha:** active account is `MBrekhof` (has push access to this repo). If a push 403s, run
+  `gh auth switch --user MBrekhof` — `MartinWLN` can't push here.
+- **Republish the exe after any src change** — live Claude Code sessions run `bin/publish/mcpRoslyn.exe`, not your
+  build output, so a fix is invisible to them until republished. Stop running instances first (they hold the lock);
+  this also drops the MCP server out of the current session until it restarts.
+- **The ContextBoard sync closes cards but does not rewrite the body of a closed one.** After marking items `[x]` in
+  `TODO.md` and running the sync, the cards went Done while still showing their original problem text — the outcome
+  was written separately via `update_card`'s `conclusion` field. Expect to do both.
 
 ## Known limitations / gotchas (unchanged)
 
 - **Windows-only.** `MSBuildLocator` and path-comparison code aren't portable yet.
 - **Project-file changes need explicit `reload_workspace`.** Per-call mtime refresh only walks already-known documents. Same for the index — new symbols in new files won't appear until reload.
 - **Stderr capture window** of Claude Code is no longer a problem; use `--log-file <path>`.
-- **`duetGPT.LicenseServer` silent drop** is no longer invisible — check `reload_workspace`'s `Diagnostics` field next time you're in a duetGPT session.
+- **`duetGPT.LicenseServer` silent drop no longer happens** (WS-001, closed 2026-08-15 as not-reproducible): the
+  repo-root `duetGPT.sln` declares 4 projects and all 4 load, LicenseServer included. The old nested
+  `duetGPT\duetGPT.sln` now declares only 1 project, which is why the original repro can't be re-run.
 - **mcpRoslyn doesn't trigger Blazor / Razor source generators.** Any analysis of `.razor.cs` files or types only emitted by the Razor compiler (`App`, generated partial classes) will be incomplete.
 
 ## Useful commands
