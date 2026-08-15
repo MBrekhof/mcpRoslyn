@@ -76,7 +76,28 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
 - [x] ~~**TEST-002: `HoverToolTests.cs` line 19 stale comment.**~~ (ID: 1180) Done 2026-08-02. The comment quoted `$"Hello, {name}!"` while the fixture reads `$"Hello, {name.Trim()}!"`. The column-19 arithmetic in the same comment was re-checked and is correct.
 - [x] ~~**TEST-001: Strengthen `find_dead_code_candidates` test 3.**~~ (ID: 1179) Done 2026-08-02. `Skipped_counters_report_publicMembers_and_tests` now asserts both counters are non-zero (fixture yields `PublicMembers` 148, `Tests` 6) and that what they claim to exclude is absent from `Candidates`. Verified non-vacuous by inverting each assertion to `Be(0)` and confirming it fails — the old `Should().NotBeNull()` passed even with both counters stuck at zero.
 
+## Spotted in real-session use (BPG, 2026-08-15)
+
+- [ ] **TOOL-006: `find_dead_code_candidates` misses unreferenced public types — the case that actually matters.** (ID: 1309)
+  The tool skips the public surface by design. On a real application solution that filters out the only dead code anyone would act on, and leaves the noise behind.
+
+  Evidence, `C:\Projects\BPG\BPG.sln`, `maxResults: 18, includeTests: false`: every result was compiler-generated record plumbing (`EqualityContract`, `PrintMembers`, copy-constructors across four records) or a private backing field. Reported `skipped: { publicMembers: 214 }`.
+
+  Meanwhile BPG contains two entirely dead **public** classes the tool cannot see: `BPG.CodeGeneration.Services.CodeGenerationService` and `CodeGenerationServiceV2`. Both implement `ICodeGenerationService`, neither is DI-registered, neither is referenced anywhere outside itself. They were found with `grep`, by accident, while chasing an unrelated bug — and `CodeGenerationServiceV2` was still being edited as if it were live.
+
+  Skipping public members is right for a **packable library**, where the public surface is the product. It is wrong for an **application solution** (web app + tests, nothing packable), which is most of what this server gets pointed at.
+
+  Suggested shape — opt-in, not a default change: `includePublicTypes: false` keeps today's behaviour; `includePublicTypes: true` reports public types with zero references outside their own declaration.
+
+  The false-positive risk is the whole design problem: plenty of public types are reached only by reflection or container resolution and never by a symbol reference — DI-registered implementations (BPG hand-registers its `ICodeGenerator` implementations), controllers, hubs, `IHostedService`, EF entities reached via `DbSet<T>`, test fixtures, and types named in config or templates rather than code.
+
+  **The mitigation already exists in this server:** cross-reference candidates against `find_registrations` (including its `unclassified` raw calls) and suppress anything that appears there. "Neither referenced nor registered" is a strong signal; that combination is what makes the feature worth shipping instead of a noise generator. Consider also reporting per-project `IsPackable` so public types can be skipped in anything genuinely packaged.
+
+  Also worth fixing while here: `project_overview` emits a `Failure` diagnostic for `.esproj` (JS/TS) projects — *"Cannot open project … because the file extension '.esproj' is not associated with a language."* Expected in a polyglot solution, but it reads as a real error. Downgrade to Info or classify as `Skipped`.
+
 ## Real-session validation (still to do)
 
 - [ ] **VAL-001: Use mcpRoslyn in one feature-sized duetGPT task.** (ID: 1171)
   Record: missing tools, wrong response shapes, cold-start friction. The acceptance logs cover correctness of canned queries; they do not cover end-to-end usefulness in an agent loop. Highest-value non-perf item.
+
+  Partial data point already in hand from BPG (2026-08-15), see TOOL-006: `find_registrations` and `project_overview` both earned their keep — `find_registrations "Hangfire"` would have shown a bug that instead took a `dotnet-stack` dump on a hung process, and `project_overview` caught `BPG.Core` violating its own documented "dependency-free" rule on the first call. `find_dead_code_candidates` did not. The agent-loop friction worth recording: the tools were available all session and went unused until prompted, because grep is the reflex.
