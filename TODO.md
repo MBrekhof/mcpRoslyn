@@ -209,7 +209,35 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
 
 ## Real-session validation (still to do)
 
-- [ ] **VAL-001: Use mcpRoslyn in one feature-sized duetGPT task.** (ID: 1171)
-  Record: missing tools, wrong response shapes, cold-start friction. The acceptance logs cover correctness of canned queries; they do not cover end-to-end usefulness in an agent loop. Highest-value non-perf item.
+- [ ] **VAL-001: Use mcpRoslyn in one feature-sized task.** (ID: 1171) — **in Todo, est. 4 h**
+  Do one feature-sized task in a real repo with the MCP server connected, and write down how the tools actually behaved
+  in the agent loop. The acceptance logs cover correctness of canned queries; they do not cover end-to-end usefulness.
+  Highest-value remaining item — it is the only thing that can unblock TOOL-004 and TOOL-005, both of which say in
+  their own bodies not to build without this evidence.
 
-  Partial data point already in hand from BPG (2026-08-15), see TOOL-006: `find_registrations` and `project_overview` both earned their keep — `find_registrations "Hangfire"` would have shown a bug that instead took a `dotnet-stack` dump on a hung process, and `project_overview` caught `BPG.Core` violating its own documented "dependency-free" rule on the first call. `find_dead_code_candidates` did not. The agent-loop friction worth recording: the tools were available all session and went unused until prompted, because grep is the reflex.
+  **The finding to design around, from the BPG session (2026-08-15):** the tools were available the whole session and
+  went unused until explicitly prompted, **because grep is the reflex**. That is an adoption problem, not a tool-surface
+  problem, and it is probably the most valuable thing to measure. A run that only asks "did the tools return the right
+  answer" will miss it entirely.
+
+  Suggested shape so it doesn't drift into unstructured poking:
+  - Pick a task that requires *changing* code, not just reading it — the reflex only shows up under real pressure.
+  - Keep a running log, one line per tool call: what was asked, what came back, whether grep/Read was reached for
+    first and why.
+  - Answer four questions explicitly at the end: (1) which tool call replaced several greps; (2) where grep was
+    reached for when a tool would have been better, and what made grep feel cheaper; (3) which response shape was
+    awkward to consume (too big, wrong nesting, missing a field that forced a follow-up call); (4) did cold start
+    actually hurt.
+
+  Two things changed on 2026-08-15 that should shape the run. **Cold-start friction is largely gone for `SymbolIndex`**
+  (PERF-001): ~0.1–0.4 s, down from seconds — but `InvocationIndex` is now the dominant cost (1715 ms BPG, 12 205 ms
+  duetGPT), so if cold start still hurts, that is the thing to point at, and this run is what would justify carding it.
+  And **`find_dead_code_candidates` is worth re-testing** (TOOL-006): it is the one tool the BPG session judged not to
+  have earned its keep, and it has since been substantially fixed, so that verdict is stale.
+
+  Deliverable is written findings, not code — a short report in `docs/acceptance/`. Prior data point worth carrying in:
+  `find_registrations` and `project_overview` both clearly earned their keep on BPG — `find_registrations "Hangfire"`
+  would have surfaced a bug that instead cost a `dotnet-stack` dump on a hung process, and `project_overview` caught
+  `BPG.Core` violating its own documented "dependency-free" rule on the first call.
+
+  Any repo with a real pending task works; BPG is now the better-understood benchmark of the two.
