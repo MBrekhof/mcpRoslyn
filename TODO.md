@@ -45,8 +45,12 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
 
 - [ ] **WS-003: Extract project name from `WorkspaceLoadDiagnostic.Message`.** (ID: 1174)
   Currently the DTO is `{ Kind, Message }`; the project filename is embedded in the message text. Adding a `ProjectName: string?` field (regex-extracted from the message) would make filtering/grouping easier for tool callers. Small, safe.
-- [ ] **WS-002: Fix the `Workspace.WorkspaceFailed` obsolete warning.** (ID: 1173)
-  Roslyn 5.3 deprecates the event in favor of `RegisterWorkspaceFailedHandler`. CS0618 has been accepted since v1; a small migration would clean it up. Currently warns at `WorkspaceService.cs:95` on every build.
+- [x] ~~**WS-002: Fix the `Workspace.WorkspaceFailed` obsolete warning.**~~ (ID: 1173)
+  Done 2026-08-15. Migrated to `RegisterWorkspaceFailedHandler(Action<WorkspaceDiagnosticEventArgs>)`; the src project
+  now builds with **0 warnings**. The risk with this change is that it compiles clean and silently never fires, so it
+  was checked behaviourally, not just by the warning disappearing: `LoadAsync_broken_solution_captures_diagnostics`
+  still captures diagnostics, and a new test loads a solution naming a `.esproj` and asserts the diagnostic arrives
+  classified as `SkippedUnsupportedProject` (which also gives TOOL-006's `.esproj` change its first in-repo coverage).
 - [ ] **WS-001: Investigate `duetGPT.LicenseServer` silent drop.** (ID: 1172)
   v2.0 of duetGPT's .sln declares 5 projects; MSBuildWorkspace consistently loads 4. `duetGPT.LicenseServer` is filtered out *before* MSBuild raises a `WorkspaceFailed` event, so the v1.1 diagnostics-surfacing work (`WorkspaceLoadDiagnostic`) doesn't catch it — verified in v1.2 acceptance ([`docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md`](docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md)).
 
@@ -67,8 +71,17 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
 
 ## Nice-to-haves spotted during v1.3
 
-- [ ] **IDX-001: `SymbolIndex.AllSymbols()` not in dirty-walk.** (ID: 1178)
-  Could return stale data after edits. Low-impact for `find_dead_code_candidates` (a run-occasionally tool); revisit if observed in practice.
+- [x] ~~**IDX-001: `SymbolIndex.AllSymbols()` not in dirty-walk.**~~ (ID: 1178)
+  Done 2026-08-15. `AllSymbols` now takes the current `Solution` and goes through the same `MergeWithDirtyWalk` the
+  pattern queries use, so a symbol added after the index was built is visible without an explicit `reload_workspace`.
+  `MergeWithDirtyWalk` returns `IndexedSymbol` instead of `SymbolInfo` (the three `Query*` methods project `.Info`),
+  which keeps it as the single merge path rather than a copy of it for the flat enumeration.
+
+  This also puts de-duplication in one place. The build indexes a symbol once per *referencing* project, because a
+  project reference pulls the referenced project's source symbols into the referencing compilation; the merge already
+  de-duplicated by symbol id for the pattern queries, and the flat enumeration now gets that for free. The temporary
+  de-dup added in `find_dead_code_candidates` for TOOL-006 was removed in favour of it — its regression test still
+  fails if the merge is bypassed.
 - [x] ~~**TOOL-003: `find_dead_code_candidates` `Skipped` counters truncate when `maxResults` hits.**~~ (ID: 1177)
   Done 2026-08-15. The scan used to `break` at `maxResults`, so the counters described only the prefix it had walked.
   It now keeps classifying and stops only the expensive reference scans, and the result carries a new `Truncated: bool`

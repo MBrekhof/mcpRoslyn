@@ -99,7 +99,9 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         _workspace = MSBuildWorkspace.Create();
-        _workspace.WorkspaceFailed += (_, e) =>
+        // RegisterWorkspaceFailedHandler, not the WorkspaceFailed event: the event is obsolete in
+        // Roslyn 5.3 (CS0618 on every build) and its replacement no longer forces the UI thread.
+        _workspace.RegisterWorkspaceFailedHandler(e =>
         {
             // A polyglot solution (.esproj, .njsproj, .sqlproj…) always raises a Failure here.
             // That is expected, not broken, so it gets its own kind instead of reading as a real error.
@@ -109,7 +111,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
             var diag = new WorkspaceLoadDiagnostic(kind, e.Diagnostic.Message);
             lock (_diagnosticsLock) _diagnostics.Add(diag);
             log.LogWarning("MSBuild workspace event: {Kind} {Message}", kind, e.Diagnostic.Message);
-        };
+        });
 
         _solution = await _workspace.OpenSolutionAsync(options.SolutionPath, cancellationToken: ct);
         log.LogInformation("Loaded {ProjectCount} projects in {Elapsed} ms from {Path}",

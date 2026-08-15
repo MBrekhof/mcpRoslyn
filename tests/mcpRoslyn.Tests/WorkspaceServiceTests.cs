@@ -141,6 +141,35 @@ public class WorkspaceServiceTests
     }
 
     [Test]
+    public async Task Project_with_no_Roslyn_language_is_classified_not_reported_as_a_failure()
+    {
+        // A polyglot solution (.esproj/.njsproj/.sqlproj) always trips WorkspaceFailed. That is
+        // expected, so it gets its own kind instead of reading as a broken solution (TOOL-006).
+        var tempDir = Path.Combine(Path.GetTempPath(), $"mcpRoslyn-polyglot-{Guid.NewGuid()}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "Frontend.esproj"), "<Project />\n");
+            var slnPath = Path.Combine(tempDir, "Polyglot.sln");
+            File.WriteAllText(slnPath,
+                "Microsoft Visual Studio Solution File, Format Version 12.00\n" +
+                "Project(\"{54A90642-561A-4BB1-A94E-469ADEE60C69}\") = \"Frontend\", \"Frontend.esproj\", \"{22222222-2222-2222-2222-222222222222}\"\n" +
+                "EndProject\n");
+
+            var sut = new WorkspaceService(
+                new McpRoslynOptions { SolutionPath = slnPath }, NullLogger<WorkspaceService>.Instance);
+            await sut.LoadAsync();
+
+            sut.Diagnostics.Should().Contain(d => d.Kind == "SkippedUnsupportedProject");
+            sut.Diagnostics.Should().NotContain(d => d.Kind == "Failure");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Test]
     public async Task ReloadAsync_clears_prior_diagnostics()
     {
         // First load a broken solution to populate diagnostics, then reload pointing

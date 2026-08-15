@@ -152,6 +152,40 @@ public class SymbolIndexTests
     }
 
     [Test]
+    public async Task AllSymbols_dirty_walk_picks_up_a_newly_added_type()
+    {
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+
+        var solution = await sut.GetFreshSolutionAsync();
+        var doc = solution.Projects
+            .SelectMany(p => p.Documents)
+            .First(d => d.Name == "Partial1.cs");
+        var backup = File.ReadAllText(doc.FilePath!);
+
+        try
+        {
+            sut.SymbolIndex.AllSymbols(solution)
+                .Should().NotContain(e => e.Info.Name == "AddedAfterIndexBuild");
+
+            File.WriteAllText(doc.FilePath!, backup + "\npublic sealed class AddedAfterIndexBuild { }\n");
+            File.SetLastWriteTimeUtc(doc.FilePath!, DateTime.UtcNow.AddSeconds(1));
+
+            // IDX-001: AllSymbols used to return the raw build-time list, so a symbol added after
+            // the index was built stayed invisible until an explicit reload_workspace.
+            var refreshed = await sut.GetFreshSolutionAsync();
+            sut.SymbolIndex.AllSymbols(refreshed)
+                .Should().Contain(e => e.Info.Name == "AddedAfterIndexBuild");
+        }
+        finally
+        {
+            File.WriteAllText(doc.FilePath!, backup);
+        }
+    }
+
+    [Test]
     public async Task ReloadAsync_constructs_fresh_index_with_empty_dirty_set()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };

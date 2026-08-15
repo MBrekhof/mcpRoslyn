@@ -78,7 +78,7 @@ public sealed class SymbolIndex
         return MergeWithDirtyWalk(
             bucket, dirty, currentSolution,
             predicate: sym => sym.GetAttributes().Any(a => MatchesTypeName(a.AttributeClass, target)),
-            ct);
+            ct).Select(e => e.Info).ToArray();
     }
 
     public IReadOnlyList<Contracts.SymbolInfo> QueryReturnType(string target, Solution currentSolution, CancellationToken ct = default)
@@ -94,7 +94,7 @@ public sealed class SymbolIndex
         return MergeWithDirtyWalk(
             bucket, dirty, currentSolution,
             predicate: sym => sym is IMethodSymbol m && MatchesTypeName(m.ReturnType, target),
-            ct);
+            ct).Select(e => e.Info).ToArray();
     }
 
     public IReadOnlyList<Contracts.SymbolInfo> QueryParameterType(string target, Solution currentSolution, CancellationToken ct = default)
@@ -110,12 +110,27 @@ public sealed class SymbolIndex
         return MergeWithDirtyWalk(
             bucket, dirty, currentSolution,
             predicate: sym => sym is IMethodSymbol m && m.Parameters.Any(p => MatchesTypeName(p.Type, target)),
-            ct);
+            ct).Select(e => e.Info).ToArray();
     }
 
-    public IReadOnlyList<IndexedSymbol> AllSymbols()
+    /// <summary>
+    /// Every indexed symbol, through the same dirty-walk the pattern queries use: entries whose
+    /// declaring documents have changed since the build are dropped and re-walked live (IDX-001).
+    /// Results are de-duplicated by symbol id — a project reference pulls the referenced project's
+    /// source symbols into the referencing compilation, so the build indexes them once per
+    /// referencing project.
+    /// </summary>
+    public IReadOnlyList<IndexedSymbol> AllSymbols(Solution currentSolution, CancellationToken ct = default)
     {
-        lock (_gate) return new List<IndexedSymbol>(_all);
+        List<IndexedSymbol> all;
+        HashSet<DocumentId> dirty;
+        lock (_gate)
+        {
+            all = new(_all);
+            dirty = new(_dirty);
+        }
+
+        return MergeWithDirtyWalk(all, dirty, currentSolution, predicate: _ => true, ct);
     }
 
     // ---------- Helpers ----------
@@ -133,20 +148,20 @@ public sealed class SymbolIndex
         }
     }
 
-    private List<Contracts.SymbolInfo> MergeWithDirtyWalk(
+    private List<IndexedSymbol> MergeWithDirtyWalk(
         List<IndexedSymbol> bucket,
         HashSet<DocumentId> dirty,
         Solution currentSolution,
         Func<ISymbol, bool> predicate,
         CancellationToken ct)
     {
-        var results = new List<Contracts.SymbolInfo>();
+        var results = new List<IndexedSymbol>();
         var seen = new HashSet<string>();
 
         foreach (var entry in bucket)
         {
             if (entry.DeclaringDocs.Overlaps(dirty)) continue;
-            if (seen.Add(entry.SymbolId)) results.Add(entry.Info);
+            if (seen.Add(entry.SymbolId)) results.Add(entry);
         }
 
         foreach (var docId in dirty)
@@ -162,7 +177,8 @@ public sealed class SymbolIndex
                 if (!predicate(sym)) continue;
                 var info = RoslynHelpers.ToSymbolInfo(sym);
                 var key = !string.IsNullOrEmpty(info.SymbolId) ? info.SymbolId : sym.ToDisplayString();
-                if (seen.Add(key)) results.Add(info);
+                if (seen.Add(key))
+                    results.Add(new IndexedSymbol(key, new HashSet<DocumentId> { docId }, info));
             }
         }
 

@@ -59,7 +59,8 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
-            var indexed = Workspace.SymbolIndex.AllSymbols();
+            // Dirty-walked and de-duplicated by the index itself (IDX-001).
+            var indexed = Workspace.SymbolIndex.AllSymbols(solution, ct2);
 
             // Built once, and only when it will be consulted — it walks the whole DI index.
             var registered = includePublicTypes ? BuildRegistrationLookup() : null;
@@ -68,15 +69,9 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
             var truncated = false;
             var candidates = new List<DeadCodeCandidate>();
 
-            // A project reference pulls the referenced project's source symbols into its own
-            // compilation, so SymbolIndex holds one entry per referencing project. Without this
-            // the same type is reported several times, and every Skipped counter is inflated.
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-
             foreach (var entry in indexed)
             {
                 ct2.ThrowIfCancellationRequested();
-                if (!seen.Add(entry.SymbolId)) continue;
 
                 // Resolve back to ISymbol for accessibility / attribute / containing-project checks
                 var symbol = await RoslynHelpers.ResolveSymbolByIdAsync(solution, entry.SymbolId, ct2);
