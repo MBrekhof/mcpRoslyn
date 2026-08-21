@@ -48,6 +48,13 @@ v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](
   Revisit if/when mcpRoslyn needs to be installed outside the local machine. Needs a feed; not worth it for single-user.
 - [ ] **DIST-002: HTTP/SSE transport.** (ID: 1183)
   Currently stdio only. Re-evaluate cold-start-cost vs. complexity once session data shows whether multiple Claude Code sessions on the same solution would benefit from sharing one workspace process.
+
+  **Reference impl (2026-08-21):** roslynk (`C:\Projects\roslynk`, MIT) is exactly this shape — streamable-HTTP
+  daemon bound to loopback `:6502`, holding N solutions (`get_solution_status` is daemon-wide), and a `stdio` verb
+  that is a self-launching bridge: the MCP client spawns it, it starts the daemon if none is listening, and pipes the
+  session through. Clients keep the plain stdio registration, so the transport change is invisible to `.mcp.json`.
+  Also cross-platform (DIST-003) and installable as a Windows service (`installer/`). The bridge-spawns-daemon
+  pattern is the part worth copying; it removes the "who starts the daemon" question that made this card a deferral.
 - [ ] **DIST-003: Cross-platform (Linux/Mac).** (ID: 1184)
   Deferred until there's a real non-Windows user. `MSBuildLocator` and path-comparison code would both need attention.
 - [ ] **TOOL-005: Wider `semantic_search` grammar.** (ID: 1185)
@@ -235,6 +242,13 @@ mcpRoslyn answers on a branch with compile errors on the floor.
   Soft-sequenced behind VAL-001, deliberately **not** a blocking dependency: the gap is real either way, but VAL-001
   would show how much it is worth.
 
+  **Reference impl (2026-08-21):** roslynk (`C:\Projects\roslynk`, MIT) ships this as `get_diagnostics` —
+  `includeAnalyzers` default **true**, `targetFramework` pins a multi-TFM project, results cached per
+  `(targetFramework, includeAnalyzers)` and invalidated on any write; the header always carries all four counts so the
+  include flags are never silent. Measured on BPG: 5.3 s cold with analyzers (xUnit analyzers included), 0.0 s cached.
+  So "expensive" above is the *first* call, and a per-(TFM, analyzers) cache is what makes default-on affordable —
+  worth reading `Source/App/Morris.Roslynk/Features/Diagnostics/` before deciding on opt-in vs default-on here.
+
 - [ ] **PERF-002: Measure per-tool response size — token cost is a design metric.** (ID: 1312) — **Todo, est. 1 h**
   Measurement, not a feature. Every response is spent from the agent's context budget and we have never measured any
   of them. Serialize a representative call to each of the 20 tools against BPG, record bytes and approximate tokens,
@@ -253,6 +267,12 @@ mcpRoslyn answers on a branch with compile errors on the floor.
   a budget is exhausted the response *names the tier it dropped and how to fetch it* instead of truncating silently:
   `omitted: direct_callers (budget_exhausted) — fetch with tier=direct_callers`. `analyze_symbol` is the obvious
   first taker: five sections in one call, so a budget + named-omission is a better default than returning all five.
+
+  **Method (2026-08-21):** roslynk's `Source/TestFixtures/Benchmarks/Benchmarks.md` (`C:\Projects\roslynk`) is a
+  ready-made spec for this measurement — per tool, median-of-3 warm ms **and** `len(text)/4` tokens, against a
+  grep/sed/`dotnet build` baseline row, one GFM table. Reuse it as-is against BPG for our 20 tools. Data point: its
+  bare compile check returns 11 tokens (four count headers); its output is `key=value` + tab-indented tree rather
+  than JSON, which is where most of the gap to our responses will come from.
 
 - [ ] **TOOL-007: Semantic diff against a baseline.** (ID: 1313) — Backlog, **blocked on VAL-001**
   "What public API did this branch change" — added/removed/re-signatured members vs the branch point. Carded so it
@@ -309,5 +329,17 @@ rebuilding NDepend badly.
   `find_registrations` and `project_overview` both clearly earned their keep on BPG — `find_registrations "Hangfire"`
   would have surfaced a bug that instead cost a `dotnet-stack` dump on a hung process, and `project_overview` caught
   `BPG.Core` violating its own documented "dependency-free" rule on the first call.
+
+  **Run roslynk alongside (added 2026-08-21).** https://github.com/mrpmorris/roslynk (Peter Morris, MIT, beta) is
+  cloned at `C:\Projects\roslynk`, built Release, and registered **project-scoped in BPG's `.mcp.json`** next to
+  NDepend — so the BPG session has both servers and this run answers a fifth question for free: **(5) which server did
+  the agent reach for, per task shape?** roslynk covers the *edit loop* we don't — `apply_patch` (content-anchored
+  diff, stale-guarded, folds into the in-memory model), `get_code_actions`/`apply_code_fix` (real Roslyn fixes),
+  `change_signature`, `remove_unused_usings`, Razor-aware rename — plus analyzer diagnostics by default and a
+  persistent loopback daemon (`:6502`, auto-spawned by its `stdio` bridge) that keeps solutions warm across sessions.
+  We cover the *orientation layer* it doesn't — `project_overview`, `find_registrations`, `find_entrypoints`,
+  `test_map`, `semantic_search`, DI-aware dead-code filtering. Smoke-tested on BPG 2026-08-21: 8/8 projects Ready in
+  15 s, `get_diagnostics` 5.3 s cold / 0.0 s cached, bare compile check = **11 tokens**. If the agent uses roslynk's
+  write tools under pressure, mcpRoslyn's lane is the architecture layer; if it ignores them, nothing changes.
 
   Any repo with a real pending task works; BPG is now the better-understood benchmark of the two.
