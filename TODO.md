@@ -246,11 +246,24 @@ mcpRoslyn answers on a branch with compile errors on the floor.
   repo already treats milliseconds. Pairs with VAL-001's "which response shape was awkward to consume", and unlike
   that question this half needs no live session.
 
+  **Target response shape (from lurp, evaluated 2026-08-21 — https://github.com/t-macabee/lurp, MIT, a Roslyn+MCP
+  sibling of this tool; skipped as a whole, ~80% overlap):** once measured, the shape worth copying is its "capsule".
+  Every response carries two fields — `estimated_tokens` (the content the budget was spent on) and
+  `estimated_artifact_tokens` (the whole emitted payload, i.e. what actually lands in the context window) — and when
+  a budget is exhausted the response *names the tier it dropped and how to fetch it* instead of truncating silently:
+  `omitted: direct_callers (budget_exhausted) — fetch with tier=direct_callers`. `analyze_symbol` is the obvious
+  first taker: five sections in one call, so a budget + named-omission is a better default than returning all five.
+
 - [ ] **TOOL-007: Semantic diff against a baseline.** (ID: 1313) — Backlog, **blocked on VAL-001**
   "What public API did this branch change" — added/removed/re-signatured members vs the branch point. Carded so it
   isn't lost, **not** because it is justified. `git diff` already answers "which lines changed" far more cheaply; this
   is only worth building for the part git can't do — telling a signature change from a comment reflow, or noticing a
   public member vanished. If VAL-001 shows the agent just reads the git diff, close this unbuilt.
+
+  **Prior art (2026-08-21):** lurp (https://github.com/t-macabee/lurp, MIT) has this built — `index` persists
+  Roslyn snapshots to SQLite (3-snapshot retention, `pin-snapshot` to keep one) and `diff --from-snapshot --to-snapshot`
+  reports semantic changes between two. Its existence does not change the gate above; it is a reference to read
+  before writing ours if VAL-001 ever unblocks this.
 
 ### Evaluated and deliberately not building
 
