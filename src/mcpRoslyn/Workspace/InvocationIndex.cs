@@ -71,31 +71,6 @@ public sealed class InvocationIndex
                 var semantic = compilation.GetSemanticModel(tree);
                 IndexDocument(doc.Id, tree, semantic);
             }
-
-            // Walk symbols for BackgroundService subclasses
-            foreach (var sym in WalkTypes(compilation.GlobalNamespace))
-            {
-                ct.ThrowIfCancellationRequested();
-                if (IsBackgroundServiceSubclass(sym))
-                {
-                    var loc = sym.Locations
-                        .Select(l => RoslynHelpers.ToLocation(l))
-                        .FirstOrDefault(l => l is not null);
-                    if (loc is null) continue;
-                    var sourceTree = sym.Locations.FirstOrDefault(l => l.IsInSource)?.SourceTree;
-                    if (sourceTree is null) continue;
-                    var docId = solution.GetDocumentId(sourceTree);
-                    if (docId is null) continue;
-                    var entry = new HostedServiceEntry(
-                        Kind: "subclass",
-                        ServiceType: null,
-                        Type: sym.ToDisplayString(),
-                        BaseType: sym.BaseType?.Name,
-                        DocumentId: docId,
-                        Location: loc);
-                    lock (_gate) _hostedServices.Add(entry);
-                }
-            }
         });
         await Task.WhenAll(tasks);
     }
@@ -132,7 +107,15 @@ public sealed class InvocationIndex
     public IReadOnlyList<HostedServiceEntry> QueryHostedServices()
     {
         RefreshDirty();
-        lock (_gate) return new List<HostedServiceEntry>(_hostedServices);
+        lock (_gate)
+        {
+            // A partial subclass has one entry per declaring file; report it once per project —
+            // same-named types in different projects are different types.
+            var seen = new HashSet<(string Type, ProjectId Project)>();
+            return _hostedServices
+                .Where(h => h.Kind != "subclass" || seen.Add((h.Type!, h.DocumentId.ProjectId)))
+                .ToList();
+        }
     }
 
     public DiQueryResult QueryDi()
@@ -228,6 +211,29 @@ public sealed class InvocationIndex
                     DocumentId: docId,
                     Location: loc));
             }
+        }
+
+        // BackgroundService subclasses are found here, per document, not by walking the
+        // compilation's namespaces: RefreshDirty re-indexes through this method, so a subclass
+        // has to be re-found when its file changes (IDX-003). The namespace walk also covered
+        // every referenced assembly — the waste PERF-001 removed from SymbolIndex.
+        foreach (var cls in root.DescendantNodes().OfType<ClassDeclarationSyntax>())
+        {
+            if (semantic.GetDeclaredSymbol(cls) is not INamedTypeSymbol type || !IsBackgroundServiceSubclass(type))
+                continue;
+            // A partial class is recorded by every file declaring it (QueryHostedServices reports it
+            // once), so editing any part — including adding the base list to a non-first part —
+            // re-finds it. ponytail: removing the base from one part leaves the other parts' entries
+            // until those files change or a reload; dirtiness is per document (IDX-004 ceiling).
+            var loc = RoslynHelpers.ToLocation(cls.Identifier.GetLocation());
+            if (loc is null) continue;
+            lock (_gate) _hostedServices.Add(new HostedServiceEntry(
+                Kind: "subclass",
+                ServiceType: null,
+                Type: type.ToDisplayString(),
+                BaseType: type.BaseType?.Name,
+                DocumentId: docId,
+                Location: loc));
         }
     }
 
@@ -365,28 +371,5 @@ public sealed class InvocationIndex
             Column: span.StartLinePosition.Character + 1,
             EndLine: span.EndLinePosition.Line + 1,
             EndColumn: span.EndLinePosition.Character + 1);
-    }
-
-    private static IEnumerable<INamedTypeSymbol> WalkTypes(INamespaceSymbol ns)
-    {
-        foreach (var member in ns.GetMembers())
-        {
-            if (member is INamespaceSymbol n)
-                foreach (var t in WalkTypes(n)) yield return t;
-            else if (member is INamedTypeSymbol type)
-            {
-                yield return type;
-                foreach (var nested in WalkNested(type)) yield return nested;
-            }
-        }
-    }
-
-    private static IEnumerable<INamedTypeSymbol> WalkNested(INamedTypeSymbol type)
-    {
-        foreach (var nested in type.GetTypeMembers())
-        {
-            yield return nested;
-            foreach (var inner in WalkNested(nested)) yield return inner;
-        }
     }
 }

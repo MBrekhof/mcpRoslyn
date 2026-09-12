@@ -53,6 +53,81 @@ public sealed class InvocationIndexTests
     }
 
     [Test]
+    public async Task Subclass_entry_survives_a_refresh_of_its_own_file_and_is_indexed_once()
+    {
+        // IDX-003: a dirty re-walk removed every hosted-service entry for the document, but only
+        // the full build could find subclasses — touching the file made the worker vanish.
+        await using var host = await TestHost.CreateWorkspaceAsync();
+        var sol = await host.Workspace.GetFreshSolutionAsync();
+        var workerPath = sol.Projects
+            .SelectMany(p => p.Documents)
+            .First(d => d.Name == "PollingWorker.cs")
+            .FilePath!;
+
+        host.Workspace.InvocationIndex.QueryHostedServices()
+            .Where(h => h.Kind == "subclass" && h.Type!.EndsWith("PollingWorker"))
+            .Should().ContainSingle("the build records each subclass once");
+
+        var original = await File.ReadAllTextAsync(workerPath);
+        try
+        {
+            await File.WriteAllTextAsync(workerPath, original + "\n// touched\n");
+            File.SetLastWriteTimeUtc(workerPath, DateTime.UtcNow.AddSeconds(1));
+            await host.Workspace.GetFreshSolutionAsync();
+
+            host.Workspace.InvocationIndex.QueryHostedServices()
+                .Where(h => h.Kind == "subclass" && h.Type!.EndsWith("PollingWorker"))
+                .Should().ContainSingle("a refresh re-finds the subclass in the changed file");
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(workerPath, original);
+        }
+    }
+
+    // Whichever part Roslyn lists first, the other one's case fails under a first-declaration-only
+    // rule; the both-parts case produces two raw entries and fails without de-duplication.
+    [TestCase("A")]
+    [TestCase("B")]
+    [TestCase("A", "B")]
+    public async Task Base_list_added_to_any_partial_part_is_found_once(params string[] partsWithBase)
+    {
+        await using var host = await TestHost.CreateWorkspaceAsync();
+        var sol = await host.Workspace.GetFreshSolutionAsync();
+        var paths = partsWithBase.ToDictionary(
+            part => part,
+            part => sol.Projects.SelectMany(p => p.Documents).First(d => d.Name == $"SplitWorker.{part}.cs").FilePath!);
+
+        host.Workspace.InvocationIndex.QueryHostedServices()
+            .Should().NotContain(h => h.Type != null && h.Type.EndsWith("SplitWorker"));
+
+        var originals = paths.ToDictionary(p => p.Key, p => File.ReadAllText(p.Value));
+        try
+        {
+            foreach (var part in partsWithBase)
+            {
+                // The override may be declared once, so only the first listed part carries it.
+                var body = part == partsWithBase[0]
+                    ? "    protected override Task ExecuteAsync(CancellationToken stoppingToken) => Task.CompletedTask;\n"
+                    : "";
+                await File.WriteAllTextAsync(paths[part],
+                    "using Microsoft.Extensions.Hosting;\n\nnamespace TestWeb;\n\n" +
+                    "public partial class SplitWorker : BackgroundService\n{\n" + body + "}\n");
+                File.SetLastWriteTimeUtc(paths[part], DateTime.UtcNow.AddSeconds(1));
+            }
+            await host.Workspace.GetFreshSolutionAsync();
+
+            host.Workspace.InvocationIndex.QueryHostedServices()
+                .Where(h => h.Kind == "subclass" && h.Type!.EndsWith("SplitWorker"))
+                .Should().ContainSingle();
+        }
+        finally
+        {
+            foreach (var (part, text) in originals) await File.WriteAllTextAsync(paths[part], text);
+        }
+    }
+
+    [Test]
     public async Task MarkDirty_then_query_walks_fresh_document()
     {
         await using var host = await TestHost.CreateWorkspaceAsync();

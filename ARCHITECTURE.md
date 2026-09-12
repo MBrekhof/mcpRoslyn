@@ -56,7 +56,7 @@ The build walks **`compilation.Assembly.GlobalNamespace`, not `compilation.Globa
 
 A sibling `InvocationIndex` (built during warm-up, owned by `WorkspaceService`, exposed via `IWorkspaceService.InvocationIndex`) backs `find_entrypoints` and `find_registrations`. It walks `InvocationExpressionSyntax` in each project's syntax trees, classifying calls into four buckets: routes (`MapGet`/`MapPost`/...), middleware (`Use*` on `IApplicationBuilder`/`WebApplication`), hosted services (`AddHostedService<T>` + `BackgroundService` subclasses), DI registrations (`AddSingleton`/`AddTransient`/`AddScoped` + an `Unclassified[]` bucket for `IServiceCollection` extension calls that don't match the known forms).
 
-Detection is syntactic — agents stay informed of unrecognised DI surface via the `Unclassified[]` array. Lifecycle and dirty-doc handling mirror `SymbolIndex`. Reconstructed on `ReloadAsync`.
+Calls are found syntactically; DI and middleware candidates are then confirmed against the semantic model (route calls are still matched by method name — TOOL-009). `BackgroundService` subclasses are found per document from `ClassDeclarationSyntax` declared symbols and their base chain, in the same per-document pass the dirty re-walk reuses, so a refresh re-finds them (IDX-003); a partial subclass is recorded by each declaring file and reported once. Agents stay informed of unrecognised DI surface via the `Unclassified[]` array. Lifecycle and dirty-doc handling mirror `SymbolIndex`. Reconstructed on `ReloadAsync`.
 
 ## Tool surface (20 tools, plus `echo`)
 
