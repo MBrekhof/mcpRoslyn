@@ -15,9 +15,10 @@ public sealed class InvocationIndexTests
         var index = host.Workspace.InvocationIndex;
         var routes = index.QueryRoutes();
 
-        routes.Should().HaveCount(2);
+        routes.Should().HaveCount(6);
         routes.Should().Contain(r => r.Verb == "GET" && r.Template == "/api/health");
         routes.Should().Contain(r => r.Verb == "POST" && r.Template == "/api/echo");
+        routes.Should().Contain(r => r.Verb == "GET,HEAD" && r.Template == "/api/multi");
     }
 
     [Test]

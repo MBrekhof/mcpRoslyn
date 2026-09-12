@@ -18,11 +18,18 @@ var app = builder.Build();
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Routes: 1 GET, 1 POST
+// Routes: 1 GET, 1 POST, 2 MapMethods (literal and partly computed verbs), a static-call route,
+// and one with escaped, out-of-order named arguments — 6 in total.
 app.MapGet("/api/health", () => "ok");
 app.MapPost("/api/echo", (string body) => body);
+app.MapMethods("/api/multi", new[] { "GET", "HEAD" }, () => "ok");
+app.MapMethods("/api/mixed", new[] { "GET", MixedVerb() }, () => "ok");
+EndpointRouteBuilderExtensions.MapGet(app, "/api/static", () => "static");
+app.MapGet(@handler: () => "named", @pattern: "/api/named");
 
 app.Run();
+
+static string MixedVerb() => "PUT";
 
 namespace TestWeb
 {

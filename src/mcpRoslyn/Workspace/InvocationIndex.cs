@@ -251,27 +251,106 @@ public sealed class InvocationIndex
 
     private static RouteEntry? TryBuildRoute(InvocationExpressionSyntax inv, SemanticModel sem, DocumentId docId, string methodName)
     {
+        // TOOL-009: the name alone is not enough — AutoMapper's Map<T>(source) is the common
+        // look-alike. A route is an extension on IEndpointRouteBuilder (WebApplication, route groups),
+        // called as one (app.MapGet) or statically (EndpointRouteBuilderExtensions.MapGet(app, …)).
+        if (ResolveMethod(inv, sem) is not { } method) return null;
+        var extension = method.ReducedFrom ?? (method.IsExtensionMethod ? method : null);
+        if (extension is not { Parameters.Length: > 0 }
+            || !ImplementsOrIs(extension.Parameters[0].Type, "Microsoft.AspNetCore.Routing.IEndpointRouteBuilder"))
+            return null;
+
+        // The parameters after the builder. A static call passes the builder as an argument too,
+        // so its parameter list (and argument positions) still include it.
+        var routeParameters = method.ReducedFrom is null ? method.Parameters.Skip(1).ToList() : method.Parameters.ToList();
+        var handlerParameter = routeParameters.FirstOrDefault(p =>
+            p.Type.ToDisplayString() is "System.Delegate" or "Microsoft.AspNetCore.Http.RequestDelegate");
+        // Every endpoint takes a handler; a same-named IEndpointRouteBuilder extension without one isn't a route.
+        if (handlerParameter is null) return null;
+
+        // Arguments by parameter, not by position: MapMethods puts the HTTP methods before the
+        // handler, and callers may name their arguments.
+        var pattern = ArgumentFor(inv, method, routeParameters.FirstOrDefault());
+        var httpMethods = ArgumentFor(inv, method, routeParameters.FirstOrDefault(p =>
+            p.Type.ToDisplayString() == "System.Collections.Generic.IEnumerable<string>"));
+        var handler = ArgumentFor(inv, method, handlerParameter);
+
         var verb = methodName switch
         {
             "MapGet" => "GET", "MapPost" => "POST", "MapPut" => "PUT",
-            "MapDelete" => "DELETE", "MapPatch" => "PATCH", _ => "ANY"
+            "MapDelete" => "DELETE", "MapPatch" => "PATCH",
+            // ponytail: literal method lists only; HttpMethods.Get constants read as ANY.
+            "MapMethods" => LiteralStrings(httpMethods) is { } verbs ? string.Join(",", verbs) : "ANY",
+            _ => "ANY"
         };
-
-        string? template = null;
-        if (inv.ArgumentList.Arguments.Count > 0 &&
-            inv.ArgumentList.Arguments[0].Expression is LiteralExpressionSyntax lit &&
-            lit.IsKind(SyntaxKind.StringLiteralExpression))
-        {
-            template = lit.Token.ValueText;
-        }
-
-        string? handler = inv.ArgumentList.Arguments.Count > 1
-            ? inv.ArgumentList.Arguments[1].Expression.ToString()
+        var template = pattern is LiteralExpressionSyntax lit && lit.IsKind(SyntaxKind.StringLiteralExpression)
+            ? lit.Token.ValueText
             : null;
 
         var loc = ToLocation(inv);
         if (loc is null) return null;
-        return new RouteEntry(verb, template, handler, docId, loc);
+        return new RouteEntry(verb, template, handler?.ToString(), docId, loc);
+    }
+
+    private static ExpressionSyntax? ArgumentFor(InvocationExpressionSyntax inv, IMethodSymbol method, IParameterSymbol? parameter)
+    {
+        if (parameter is null) return null;
+        var args = inv.ArgumentList.Arguments;
+        for (var i = 0; i < args.Count; i++)
+        {
+            if (args[i].NameColon is { } named)
+            {
+                // ValueText, not Text: `@pattern:` names the parameter `pattern`.
+                if (named.Name.Identifier.ValueText == parameter.Name) return args[i].Expression;
+            }
+            else if (i < method.Parameters.Length && SymbolEqualityComparer.Default.Equals(method.Parameters[i], parameter))
+            {
+                return args[i].Expression;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The invoked method; when overload resolution failed (an error inside a lambda, say), the
+    /// candidate whose parameter names fit the caller's named arguments, so arguments are read
+    /// against the layout the caller meant.
+    /// </summary>
+    private static IMethodSymbol? ResolveMethod(InvocationExpressionSyntax inv, SemanticModel sem)
+    {
+        var info = sem.GetSymbolInfo(inv);
+        if (info.Symbol is IMethodSymbol resolved) return resolved;
+        var candidates = info.CandidateSymbols.OfType<IMethodSymbol>().ToList();
+        var names = inv.ArgumentList.Arguments
+            .Where(a => a.NameColon is not null)
+            .Select(a => a.NameColon!.Name.Identifier.ValueText)
+            .ToList();
+        return candidates.FirstOrDefault(c => names.All(n => c.Parameters.Any(p => p.Name == n)))
+               ?? candidates.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// The strings of an array or collection literal when every element is a string literal;
+    /// null otherwise, so a partly computed list reads as ANY instead of an authoritative wrong answer.
+    /// </summary>
+    private static List<string>? LiteralStrings(ExpressionSyntax? expression)
+    {
+        IEnumerable<ExpressionSyntax?>? elements = expression switch
+        {
+            ImplicitArrayCreationExpressionSyntax a => a.Initializer.Expressions,
+            ArrayCreationExpressionSyntax { Initializer: { } init } => init.Expressions,
+            CollectionExpressionSyntax c => c.Elements.Select(e => (e as ExpressionElementSyntax)?.Expression),
+            _ => null
+        };
+        if (elements is null) return null;
+
+        var values = new List<string>();
+        foreach (var element in elements)
+        {
+            if (element is not LiteralExpressionSyntax lit || !lit.IsKind(SyntaxKind.StringLiteralExpression)) return null;
+            values.Add(lit.Token.ValueText);
+        }
+        return values.Count > 0 ? values : null;
     }
 
     private static bool IsApplicationBuilderCall(InvocationExpressionSyntax inv, SemanticModel sem)
@@ -285,6 +364,9 @@ public sealed class InvocationIndex
 
     private static HostedServiceEntry? TryBuildHostedService(InvocationExpressionSyntax inv, SemanticModel sem, DocumentId docId)
     {
+        // TOOL-009: only the IServiceCollection extension registers a hosted service.
+        if (!IsServiceCollectionCall(inv, sem)) return null;
+
         var genericName = inv.Expression switch
         {
             MemberAccessExpressionSyntax m when m.Name is GenericNameSyntax g => g,
@@ -337,9 +419,12 @@ public sealed class InvocationIndex
     {
         var symbol = sem.GetSymbolInfo(inv).Symbol as IMethodSymbol;
         if (symbol is null) return false;
-        if (symbol.IsExtensionMethod && symbol.ReducedFrom is { Parameters.Length: > 0 } reduced)
-            return reduced.Parameters[0].Type.ToDisplayString() == "Microsoft.Extensions.DependencyInjection.IServiceCollection";
-        if (symbol.ContainingType.ToDisplayString().Contains("ServiceCollection")) return true;
+        // An extension on IServiceCollection, called as one (services.AddX()) or statically
+        // (ServiceCollectionServiceExtensions.AddSingleton(services, …)). No type-name shortcut:
+        // a class that merely has "ServiceCollection" in its name is not one (TOOL-009).
+        var extension = symbol.ReducedFrom ?? (symbol.IsExtensionMethod ? symbol : null);
+        if (extension is { Parameters.Length: > 0 })
+            return ImplementsOrIs(extension.Parameters[0].Type, "Microsoft.Extensions.DependencyInjection.IServiceCollection");
         if (inv.Expression is MemberAccessExpressionSyntax m)
         {
             var t = sem.GetTypeInfo(m.Expression).Type;
