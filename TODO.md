@@ -342,7 +342,9 @@ Whole-project read-only review by Codex, verbatim in [`docs/reviews/2026-09-12-c
 All 24 findings were checked against the source and held; grouped into ten cards by shared fix. WS-006 + IDX-002
 are the pair to do first — together they are "indexed tools can answer wrong, as success".
 
-- [ ] **WS-006: Reload is not atomic — a running warm-up or a failed reload corrupts the index generation.** (ID: 1641)
+- [x] ~~**WS-006: Reload is not atomic — a running warm-up or a failed reload corrupts the index generation.**~~ (ID: 1641)
+  Done 2026-09-13 (`bc089c9`, with IDX-002). A load builds a `Generation` — workspace, both indexes, warm-up task and its own cancellation — in locals and publishes it in one step, under the gate, only after `OpenSolutionAsync` succeeds. A failed reload leaves the previous generation serving; a warm-up only builds into its own generation's indexes; a replaced generation's warm-up is cancelled and its workspace disposed after a 30 s grace (the ceiling — a query still running on the retired solution — is commented), and `DisposeAsync` disposes retiring generations too. The failed-reload test surfaced a masking effect worth knowing: the old `ReloadAsync` also cleared the mtime cache, so the empty index was hidden behind a full dirty re-walk on every query rather than returning nothing. Race tests are deterministic via an internal `BeforeIndexBuild` hook. Three Codex review rounds.
+
   From the 2026-09-12 Codex review (`docs/reviews/2026-09-12-codex-review.md`, findings 3, 5, 6), verified against the code.
 
   `LoadUnsafeAsync` publishes new state piecemeal into mutable fields, and `WarmupAsync` reads those fields rather than the instances it was started with:
@@ -352,7 +354,9 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
 
   Fix: build the generation (workspace, solution, both indexes, mtime cache, warm-up CTS) in locals, publish it in one assignment only after the load succeeds, pass the index instances into `WarmupAsync`, then cancel and dispose the outgoing generation. Do together with IDX-002 — its readiness signal belongs to the generation.
   Test: reload while the first warm-up is still running; `find_registrations` counts must match a single clean load.
-- [ ] **IDX-002: Indexed tools silently return empty results until warm-up finishes.** (ID: 1642)
+- [x] ~~**IDX-002: Indexed tools silently return empty results until warm-up finishes.**~~ (ID: 1642)
+  Done 2026-09-13 (`bc089c9`, with WS-006). Indexed tools go through `IWorkspaceService.GetIndexedSolutionAsync`, which waits for the current generation's warm-up and returns the refreshed solution with that same generation's indexes (re-targeting a successor if a reload lands mid-wait), so no tool pairs one load's solution with another's index. A failed index build is recorded on the generation and surfaces as `INDEX_UNAVAILABLE` (`IndexedSolution`'s index properties throw). The v1.2 acceptance doc's claim is corrected in place, and the PERF-002 benchmark's readiness probe is gone. The first indexed query after start or reload now blocks until the index is built — that wait is the honest cost the old code hid.
+
   From the 2026-09-12 Codex review (finding 4), verified against the code.
 
   No production code awaits `IWorkspaceService.WarmupTask` — only tests do, and `TestHost.cs:56-60` waits it away with a comment describing exactly this race. `semantic_search` (has-attribute/returns/parameter-type), `find_registrations`, `find_entrypoints` and `find_dead_code_candidates` read `SymbolIndex`/`InvocationIndex` directly, so a call in the first seconds after start or reload gets a partial or empty list **reported as success**. `InvocationIndex` takes ~1.7 s on BPG and 6-12 s on duetGPT, so "no DI registrations" is a plausible wrong answer to an agent's very first question. If an index build throws, it is logged and the empty index is served for the rest of the session.
