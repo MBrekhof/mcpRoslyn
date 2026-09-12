@@ -36,4 +36,21 @@ public class WorkspaceSymbolToolTests
         symbols.Should().Contain(s => s.Name == "IGreeter");
         symbols.Should().NotContain(s => s.Name == "EnglishGreeter");
     }
+
+    [Test]
+    public async Task WorkspaceSymbol_reports_truncation_only_when_more_matched()
+    {
+        await using var host = await TestHost.CreateAsync<WorkspaceSymbolTool>();
+
+        var capped = await host.Tool.InvokeAsync("Greeter", null, maxResults: 1, ct: CancellationToken.None);
+        capped.Result!.Symbols.Should().ContainSingle();
+        capped.Result.Truncated.Should().BeTrue();
+
+        var all = await host.Tool.InvokeAsync("Greeter", null, null, ct: CancellationToken.None);
+        all.Result!.Truncated.Should().BeFalse();
+
+        // Exactly at the cap is complete, not truncated.
+        var exact = await host.Tool.InvokeAsync("Greeter", null, maxResults: all.Result.Symbols.Count, ct: CancellationToken.None);
+        exact.Result!.Truncated.Should().BeFalse();
+    }
 }

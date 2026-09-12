@@ -8,14 +8,14 @@ using RoslynSymbolInfo = Microsoft.CodeAnalysis.SymbolInfo;
 
 namespace mcpRoslyn.Tools;
 
-public sealed record WorkspaceSymbolResult(IReadOnlyList<Contracts.SymbolInfo> Symbols);
+public sealed record WorkspaceSymbolResult(IReadOnlyList<Contracts.SymbolInfo> Symbols, bool Truncated);
 
 [McpServerToolType]
 internal sealed class WorkspaceSymbolTool(IWorkspaceService ws, ILogger<WorkspaceSymbolTool> log)
     : ToolBase(ws, log)
 {
     [McpServerTool(Name = "workspace_symbol")]
-    [Description("Fuzzy name search across the entire solution. Returns up to maxResults symbols.")]
+    [Description("Fuzzy name search across the entire solution. Returns up to maxResults symbols (default 25); truncated=true means more matched — narrow the query or raise maxResults.")]
     public Task<Contracts.ToolResult<WorkspaceSymbolResult>> InvokeAsync(
         string query,
         string[]? kinds,
@@ -25,7 +25,8 @@ internal sealed class WorkspaceSymbolTool(IWorkspaceService ws, ILogger<Workspac
         => ExecuteAsync(async ct2 =>
         {
             var solution = await Workspace.GetFreshSolutionAsync(ct2);
-            var cap = maxResults ?? 100;
+            // PERF-002: was 100, which cost ~10.8k tokens for one broad query on BPG.
+            var cap = maxResults ?? 25;
 
             var allowedKinds = kinds is null
                 ? null
@@ -33,10 +34,11 @@ internal sealed class WorkspaceSymbolTool(IWorkspaceService ws, ILogger<Workspac
 
             var dedup = new HashSet<string>();
             var results = new List<Contracts.SymbolInfo>();
+            var truncated = false;
 
             foreach (var project in solution.Projects)
             {
-                if (results.Count >= cap) break;
+                if (truncated) break;
                 var found = await SymbolFinder.FindSourceDeclarationsWithPatternAsync(
                     project, query,
                     SymbolFilter.Type | SymbolFilter.Member,
@@ -44,7 +46,6 @@ internal sealed class WorkspaceSymbolTool(IWorkspaceService ws, ILogger<Workspac
 
                 foreach (var sym in found)
                 {
-                    if (results.Count >= cap) break;
                     var info = RoslynHelpers.ToSymbolInfo(sym);
 
                     if (allowedKinds is not null)
@@ -54,13 +55,16 @@ internal sealed class WorkspaceSymbolTool(IWorkspaceService ws, ILogger<Workspac
                     }
 
                     if (!dedup.Add(info.SymbolId)) continue;
+                    // A match past the cap is what makes the result truncated, not reaching it.
+                    if (results.Count >= cap) { truncated = true; break; }
                     results.Add(info);
                 }
             }
 
-            var result = new WorkspaceSymbolResult(results);
+            var result = new WorkspaceSymbolResult(results, truncated);
             if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
-                return Contracts.ToolResult<WorkspaceSymbolResult>.OkSummary($"{result.Symbols.Count} matching symbols");
+                return Contracts.ToolResult<WorkspaceSymbolResult>.OkSummary(
+                    $"{result.Symbols.Count} matching symbols{(result.Truncated ? " (truncated)" : "")}");
             return Contracts.ToolResult<WorkspaceSymbolResult>.Ok(result);
         }, ct);
 

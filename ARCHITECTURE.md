@@ -82,6 +82,10 @@ Every tool returns structured JSON wrapped in `ToolResult<T>` (`Result` or `Erro
 
 Every tool accepts `format = "structured" | "summary"` (default `structured`). `ToolResult<T>` carries an optional `Summary` field; in summary mode `Result` is null and `Summary` holds a one-line human description. Errors are always structured. Backwards-compatible with v1.2 callers.
 
+### Response size (PERF-002)
+
+Every response is spent from the agent's context budget, so response size is measured like latency: `BenchmarkTests.Tool_response_sizes` calls all 20 tools against a real solution over the stdio transport and records chars/tokens per tool ([2026-09-13 results](docs/acceptance/2026-09-13-perf-002-response-sizes.md)). List-returning tools cap by default and say so: `workspace_symbol` (`maxResults` 25) and `semantic_search` (`maxResults` 50) return `Truncated: true` only when a further match existed; the architecture tools carry a `Truncated` section list. `rename_symbol`'s preview diffs the documents' syntax trees (`Document.GetTextChangesAsync`), so edits are the changed spans — one per occurrence on BPG — rather than whole-file text.
+
 ### Diagnostics filter knobs
 
 `get_compilation_errors` and `get_document_diagnostics` accept `includeGenerated`, `minimumSeverity` (default `"Warning"`), `excludeDiagnosticCodes`, `excludeDiagnosticSources`. Pure post-filter at collection time, never affects how diagnostics are read from Roslyn.

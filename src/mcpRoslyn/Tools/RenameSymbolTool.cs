@@ -59,8 +59,11 @@ internal sealed class RenameSymbolTool(IWorkspaceService ws, ILogger<RenameSymbo
                     if (oldDoc is null || newDoc.FilePath is null) continue;
 
                     var oldText = await oldDoc.GetTextAsync(ct2);
-                    var newText = await newDoc.GetTextAsync(ct2);
-                    var changes = newText.GetTextChanges(oldText);
+                    // Not SourceText.GetTextChanges: Renamer rebuilds the tree rather than editing the
+                    // text, so that returns one whole-file change — the preview carried every changed
+                    // file twice, ~35k tokens for one interface rename on BPG (PERF-002). The document
+                    // diff compares syntax trees and yields one change per occurrence.
+                    var changes = await newDoc.GetTextChangesAsync(oldDoc, ct2);
                     foreach (var change in changes)
                     {
                         var oldSubstring = oldText.GetSubText(change.Span).ToString();

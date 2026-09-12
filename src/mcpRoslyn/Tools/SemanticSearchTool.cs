@@ -7,7 +7,7 @@ using mcpRoslyn.Workspace;
 
 namespace mcpRoslyn.Tools;
 
-public sealed record SemanticSearchResult(IReadOnlyList<Contracts.SymbolInfo> Matches);
+public sealed record SemanticSearchResult(IReadOnlyList<Contracts.SymbolInfo> Matches, bool Truncated = false);
 
 [McpServerToolType]
 internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticSearchTool> log)
@@ -17,9 +17,11 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
     [Description("Pattern queries Roslyn can answer but Grep cannot. Patterns: " +
                  "derives-from:Namespace.Type, implements:Namespace.IInterface, " +
                  "has-attribute:Namespace.MyAttribute, returns:Namespace.Type, " +
-                 "parameter-type:Namespace.Type. Type can also be a primitive alias like 'int' or 'string'.")]
+                 "parameter-type:Namespace.Type. Type can also be a primitive alias like 'int' or 'string'. " +
+                 "Returns up to maxResults matches (default 50); truncated=true means more matched.")]
     public Task<Contracts.ToolResult<SemanticSearchResult>> InvokeAsync(
         string pattern,
+        int maxResults = 50,
         string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
@@ -76,8 +78,15 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
                         "INVALID_PATTERN", $"Unknown pattern kind: {kind}");
             }
 
+            // PERF-002: uncapped before — one parameter-type: query was ~5k tokens on BPG, and a
+            // primitive target (returns:string) on a large solution is unbounded.
+            var cap = Math.Max(0, maxResults);
+            if (result.Matches.Count > cap)
+                result = new SemanticSearchResult(result.Matches.Take(cap).ToArray(), Truncated: true);
+
             if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
-                return Contracts.ToolResult<SemanticSearchResult>.OkSummary($"{result.Matches.Count} matches");
+                return Contracts.ToolResult<SemanticSearchResult>.OkSummary(
+                    $"{result.Matches.Count} matches{(result.Truncated ? " (truncated)" : "")}");
             return Contracts.ToolResult<SemanticSearchResult>.Ok(result);
         }, ct);
 

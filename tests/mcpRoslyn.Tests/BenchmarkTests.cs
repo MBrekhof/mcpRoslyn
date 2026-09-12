@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Microsoft.Build.Locator;
 using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
 using mcpRoslyn.Options;
 using mcpRoslyn.Tools;
 using mcpRoslyn.Workspace;
@@ -118,5 +120,109 @@ public class BenchmarkTests
         out_.WriteLine($"get_compilation_errors    compiler-only ms: [{string.Join(", ", slnCompiler)}] -> {slnCompilerCount} diagnostics");
         out_.WriteLine($"get_compilation_errors    with analyzers ms: [{string.Join(", ", slnAnalyzers)}] -> {slnAnalyzerCount} diagnostics");
         out_.WriteLine($"get_compilation_errors    median ratio analyzers/compiler: {(double)Median(slnAnalyzers) / Math.Max(1, Median(slnCompiler)):F1}x");
+    }
+
+    private const string BpgLlmServiceFile = @"C:\Projects\BPG\src\BPG.LLM\Services\LLMService.cs";
+
+    private static async Task<(long Ms, string Text, int StructuredChars, bool Failed)> CallTool(
+        McpClient client, string tool, Dictionary<string, object?> args)
+    {
+        var sw = Stopwatch.StartNew();
+        var r = await client.CallToolAsync(tool, args!);
+        var ms = sw.ElapsedMilliseconds;
+        var text = string.Concat(r.Content.OfType<TextContentBlock>().Select(c => c.Text));
+        // A tool failure is an ordinary ToolResult payload ({"error":{...}}), not MCP isError,
+        // so check both — otherwise a stale anchor is measured as if it were a real answer.
+        // Unescaped "error":{ can only be structure: inside a JSON string the quotes are escaped.
+        var failed = r.IsError == true || text.Contains("\"error\":{", StringComparison.Ordinal);
+        return (ms, text, r.StructuredContent?.ToString()?.Length ?? 0, failed);
+    }
+
+    /// <summary>
+    /// PERF-002: what each tool's default response costs the agent's context. Goes through the real
+    /// stdio transport against the built server, so the measured text is exactly what an MCP client
+    /// receives, SDK serialization included. Tokens ~= chars / 4 (roslynk's benchmark convention).
+    /// Anchors are real BPG symbols; a stale one shows up as an error in the table, not a crash.
+    /// </summary>
+    [Test]
+    public async Task Tool_response_sizes()
+    {
+        if (!File.Exists(BpgSolutionPath))
+            Assert.Ignore($"BPG.sln not found at {BpgSolutionPath}");
+        var exe = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..", "src", "mcpRoslyn", "bin", "Debug", "net10.0", "win-x64", "mcpRoslyn.exe"));
+        if (!File.Exists(exe))
+            Assert.Ignore($"Server not built at {exe}");
+
+        await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+        {
+            Name = "mcpRoslyn",
+            Command = exe,
+            Arguments = ["--solution", BpgSolutionPath],
+        }));
+
+        // IDX-002: indexed tools answer empty or partial until warm-up finishes, which would
+        // under-measure them. The index fills project by project, so wait for the registration
+        // count to stop growing over three consecutive probes, and refuse to measure on timeout.
+        var deadline = DateTime.UtcNow.AddMinutes(3);
+        int lastLength = -1, stable = 0;
+        while (stable < 3)
+        {
+            if (DateTime.UtcNow > deadline)
+                Assert.Inconclusive("Index did not settle within 3 minutes; sizes would be partial.");
+            var probe = await CallTool(client, "find_registrations",
+                new() { ["includeConsumers"] = false, ["maxResults"] = 10000 });
+            // ponytail: a project whose indexing stalls for 3 s still slips through; IDX-002 makes
+            // indexed tools await warm-up themselves, and this probe can then go.
+            stable = !probe.Failed && probe.Text.Length > 100 && probe.Text.Length == lastLength ? stable + 1 : 0;
+            lastLength = probe.Text.Length;
+            await Task.Delay(1000);
+        }
+
+        (string Tool, Dictionary<string, object?> Args)[] scenarios =
+        [
+            ("project_overview", new()),
+            ("workspace_symbol", new() { ["query"] = "Spec", ["kinds"] = null, ["maxResults"] = null }),
+            ("list_document_symbols", new() { ["filePath"] = BpgLlmServiceFile }),
+            ("hover", new() { ["filePath"] = BpgLlmServiceFile, ["line"] = 15, ["column"] = 31 }),
+            ("goto_definition", new() { ["filePath"] = BpgLlmServiceFile, ["line"] = 15, ["column"] = 31 }),
+            ("find_references", Sym("T:BPG.Core.Interfaces.IUnitOfWork")),
+            ("find_implementations", Sym("T:BPG.Core.Interfaces.ILLMService")),
+            ("find_derived_types", Sym("T:BPG.Core.Interfaces.IRepository`1")),
+            ("find_callers", Sym("M:BPG.Core.Interfaces.ILLMService.GenerateResponseAsync(System.String,BPG.Core.Models.Conversation)")),
+            ("find_callees", Sym("M:BPG.LLM.Services.LLMService.GenerateResponseAsync(System.String,BPG.Core.Models.Conversation)")),
+            ("analyze_symbol", new() { ["symbolId"] = "T:BPG.Core.Interfaces.ILLMService" }),
+            ("semantic_search", new() { ["pattern"] = "parameter-type:BPG.Core.Models.Conversation" }),
+            ("test_map", new() { ["symbolId"] = "T:BPG.LLM.Services.LLMService" }),
+            ("find_entrypoints", new()),
+            ("find_registrations", new()),
+            ("find_dead_code_candidates", new()),
+            ("get_document_diagnostics", new() { ["filePath"] = BpgLlmServiceFile, ["severity"] = null }),
+            ("get_compilation_errors", new() { ["severity"] = null, ["projectName"] = null }),
+            ("rename_symbol", new() { ["filePath"] = BpgLlmServiceFile, ["line"] = 15, ["column"] = 31, ["newName"] = "ILlmServiceRenamed" }),
+            ("reload_workspace", new()), // last: it rebuilds the workspace; timed once
+        ];
+
+        var dumpDir = Path.Combine(TestContext.CurrentContext.WorkDirectory, "perf002");
+        Directory.CreateDirectory(dumpDir);
+        var out_ = TestContext.Out;
+        out_.WriteLine($"Responses dumped to {dumpDir}");
+        out_.WriteLine("| tool | warm ms (median of 3) | chars | ~tokens | structuredContent chars | failed |");
+        out_.WriteLine("|---|---:|---:|---:|---:|---|");
+
+        foreach (var (tool, args) in scenarios)
+        {
+            var once = tool == "reload_workspace";
+            if (!once) await CallTool(client, tool, args); // warm-up call, not recorded
+            var runs = new List<(long Ms, string Text, int StructuredChars, bool Failed)>();
+            for (var i = 0; i < (once ? 1 : 3); i++) runs.Add(await CallTool(client, tool, args));
+
+            var last = runs[^1];
+            await File.WriteAllTextAsync(Path.Combine(dumpDir, tool + ".txt"), last.Text);
+            out_.WriteLine($"| {tool} | {Median(runs.Select(r => r.Ms).ToList())} | {last.Text.Length} | {last.Text.Length / 4} | {last.StructuredChars} | {runs.Any(r => r.Failed)} |");
+        }
+
+        static Dictionary<string, object?> Sym(string id) => new()
+            { ["filePath"] = null, ["line"] = null, ["column"] = null, ["symbolId"] = id };
     }
 }

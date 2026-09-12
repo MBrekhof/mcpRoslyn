@@ -58,6 +58,26 @@ public class SemanticSearchToolTests
     }
 
     [Test]
+    public async Task SemanticSearch_caps_at_maxResults_and_reports_truncation()
+    {
+        await using var host = await TestHost.CreateAsync<SemanticSearchTool>();
+
+        var all = await host.Tool.InvokeAsync("parameter-type:string", ct: CancellationToken.None);
+        all.Result!.Matches.Count.Should().BeGreaterThan(1, "the cap below must actually bite");
+        all.Result.Truncated.Should().BeFalse();
+
+        var capped = await host.Tool.InvokeAsync("parameter-type:string", maxResults: 1, ct: CancellationToken.None);
+        capped.Result!.Matches.Should().ContainSingle();
+        capped.Result.Truncated.Should().BeTrue();
+
+        // Exactly at the cap is complete, not truncated; a negative cap claims nothing.
+        var exact = await host.Tool.InvokeAsync("parameter-type:string", maxResults: all.Result.Matches.Count, ct: CancellationToken.None);
+        exact.Result!.Truncated.Should().BeFalse();
+        var none = await host.Tool.InvokeAsync("parameter-type:NoSuch.Type", maxResults: -1, ct: CancellationToken.None);
+        none.Result!.Truncated.Should().BeFalse();
+    }
+
+    [Test]
     public async Task SemanticSearch_invalid_pattern_returns_error()
     {
         await using var host = await TestHost.CreateAsync<SemanticSearchTool>();

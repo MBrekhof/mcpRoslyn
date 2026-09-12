@@ -29,6 +29,8 @@ public class RenameSymbolToolTests
         result.Error.Should().BeNull();
         result.Result.Should().NotBeNull();
         result.Result!.Edits.Should().NotBeEmpty();
+        // PERF-002: each edit is the renamed occurrence, not the whole file before and after.
+        result.Result.Edits.Should().OnlyContain(e => e.OldText == "Greet" && e.NewText == "Salute");
 
         // File on disk MUST be unchanged
         File.ReadAllText(englishGreeterPath).Should().Be(originalContent);
