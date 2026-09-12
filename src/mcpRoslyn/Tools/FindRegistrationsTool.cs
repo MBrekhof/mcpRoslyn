@@ -34,8 +34,10 @@ internal sealed class FindRegistrationsTool(IWorkspaceService ws, ILogger<FindRe
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
-            var solution = await Workspace.GetFreshSolutionAsync(ct2);
-            var di = Workspace.InvocationIndex.QueryDi();
+            var indexed = await Workspace.GetIndexedSolutionAsync(ct2);
+            var solution = indexed.Solution;
+            var di = indexed.InvocationIndex.QueryDi();
+            var symbolIndex = includeConsumers ? indexed.SymbolIndex : null;
             var truncated = new List<string>();
 
             IReadOnlyList<DiEntry> classified = string.IsNullOrWhiteSpace(query)
@@ -54,8 +56,8 @@ internal sealed class FindRegistrationsTool(IWorkspaceService ws, ILogger<FindRe
                 Lifetime:    e.Lifetime,
                 RawCall:     e.RawCall,
                 Location:    e.Location,
-                LikelyConsumers: includeConsumers && e.ServiceType is not null
-                    ? FindConsumers(e.ServiceType, solution).ToArray()
+                LikelyConsumers: symbolIndex is not null && e.ServiceType is not null
+                    ? FindConsumers(e.ServiceType, solution, symbolIndex).ToArray()
                     : Array.Empty<DiConsumer>())).ToArray();
 
             var unc = unclassified.Take(maxResults).Select(e => new RegistrationEntry(
@@ -81,16 +83,17 @@ internal sealed class FindRegistrationsTool(IWorkspaceService ws, ILogger<FindRe
             return Contracts.ToolResult<FindRegistrationsResult>.Ok(result);
         }, ct);
 
-    private IEnumerable<DiConsumer> FindConsumers(string serviceType, Microsoft.CodeAnalysis.Solution solution)
+    private static IEnumerable<DiConsumer> FindConsumers(
+        string serviceType, Microsoft.CodeAnalysis.Solution solution, SymbolIndex symbolIndex)
     {
         // SymbolIndex.QueryParameterType returns SymbolInfo for methods whose parameter type matches.
         // We're targeting constructors specifically; SymbolInfo includes Kind and Signature.
-        var matches = Workspace.SymbolIndex.QueryParameterType(serviceType, solution);
+        var matches = symbolIndex.QueryParameterType(serviceType, solution);
 
         // Also try the simple-name form (e.g., "IFoo") since SymbolIndex indexes both forms.
         var simple = serviceType.Contains('.') ? serviceType[(serviceType.LastIndexOf('.') + 1)..] : serviceType;
         if (simple != serviceType)
-            matches = matches.Concat(Workspace.SymbolIndex.QueryParameterType(simple, solution)).ToArray();
+            matches = matches.Concat(symbolIndex.QueryParameterType(simple, solution)).ToArray();
 
         var seen = new HashSet<string>();
         foreach (var m in matches)

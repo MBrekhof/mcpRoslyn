@@ -10,17 +10,42 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     : IWorkspaceService, IAsyncDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private MSBuildWorkspace? _workspace;
+    private Generation? _current;
     private Solution? _solution;
-    private readonly Dictionary<DocumentId, DateTime> _mtimeCache = new();
-    private Task _warmupTask = Task.CompletedTask;
+    private Dictionary<DocumentId, DateTime> _mtimeCache = new();
     private readonly List<WorkspaceLoadDiagnostic> _diagnostics = new();
     private readonly object _diagnosticsLock = new();
-    private SymbolIndex? _symbolIndex;
-    private InvocationIndex? _invocationIndex;
+    private readonly List<Generation> _retiring = new();       // lock on itself
+    private readonly CancellationTokenSource _disposeCts = new(); // ends retirement grace periods early
+
+    /// <summary>Test seam: awaited in each generation's warm-up after compilation, before the index builds.</summary>
+    internal Func<Task>? BeforeIndexBuild { get; set; }
+
+    /// <summary>
+    /// ponytail: a query still running on a retired generation's solution when its workspace is
+    /// disposed may fail. Reader tracking would close that; a grace period covers every query we
+    /// have measured (the slowest, find_dead_code_candidates on BPG, is ~0.5 s).
+    /// </summary>
+    private static readonly TimeSpan RetiredWorkspaceGrace = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Everything one load produced. Published as a unit only after the solution opened, so a
+    /// failed reload leaves the previous generation serving, and a warm-up can only ever build
+    /// into its own generation's indexes (WS-006).
+    /// </summary>
+    private sealed class Generation(MSBuildWorkspace workspace)
+    {
+        public MSBuildWorkspace Workspace { get; } = workspace;
+        public SymbolIndex SymbolIndex { get; } = new();
+        public InvocationIndex InvocationIndex { get; } = new();
+        public CancellationTokenSource Cts { get; } = new();
+        public Task Warmup { get; set; } = Task.CompletedTask;
+        public Exception? SymbolIndexFailure { get; set; }
+        public Exception? InvocationIndexFailure { get; set; }
+    }
 
     public int LoadedProjectCount => _solution?.Projects.Count() ?? 0;
-    public Task WarmupTask => _warmupTask;
+    public Task WarmupTask => _current?.Warmup ?? Task.CompletedTask;
 
     public IReadOnlyList<WorkspaceLoadDiagnostic> Diagnostics
     {
@@ -28,10 +53,38 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     }
 
     public SymbolIndex SymbolIndex
-        => _symbolIndex ?? throw new InvalidOperationException("Workspace not loaded.");
+        => _current?.SymbolIndex ?? throw new InvalidOperationException("Workspace not loaded.");
 
     public InvocationIndex InvocationIndex
-        => _invocationIndex ?? throw new InvalidOperationException("Workspace not loaded.");
+        => _current?.InvocationIndex ?? throw new InvalidOperationException("Workspace not loaded.");
+
+    public async Task<IndexedSolution> GetIndexedSolutionAsync(CancellationToken ct = default)
+    {
+        while (true)
+        {
+            var gen = _current ?? throw new InvalidOperationException("Workspace not loaded.");
+            try
+            {
+                await gen.Warmup.WaitAsync(ct);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested && !ReferenceEquals(gen, _current))
+            {
+                continue; // a reload retired this generation mid-wait; wait for its successor
+            }
+
+            await _gate.WaitAsync(ct);
+            try
+            {
+                // Publication happens under the gate, so this check is exact: a successor published
+                // while we waited — whether this warm-up finished or failed — is picked up here.
+                if (!ReferenceEquals(gen, _current)) continue;
+                var solution = await RefreshUnsafeAsync(ct);
+                return new IndexedSolution(
+                    solution, gen.SymbolIndex, gen.SymbolIndexFailure, gen.InvocationIndex, gen.InvocationIndexFailure);
+            }
+            finally { _gate.Release(); }
+        }
+    }
 
     public async Task LoadAsync(CancellationToken ct = default)
     {
@@ -40,48 +93,40 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         finally { _gate.Release(); }
     }
 
-    public async Task ReloadAsync(CancellationToken ct = default)
-    {
-        await _gate.WaitAsync(ct);
-        try
-        {
-            _workspace?.CloseSolution();
-            _mtimeCache.Clear();
-            await LoadUnsafeAsync(ct);
-        }
-        finally { _gate.Release(); }
-    }
+    public Task ReloadAsync(CancellationToken ct = default) => LoadAsync(ct);
 
     public async Task<Solution> GetFreshSolutionAsync(CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
-        try
-        {
-            if (_solution is null) throw new InvalidOperationException("Workspace not loaded.");
-
-            foreach (var doc in _solution.Projects.SelectMany(p => p.Documents).ToList())
-            {
-                if (doc.FilePath is null || !File.Exists(doc.FilePath)) continue;
-                var diskMtime = File.GetLastWriteTimeUtc(doc.FilePath);
-                if (_mtimeCache.TryGetValue(doc.Id, out var cachedMtime) && cachedMtime >= diskMtime)
-                    continue;
-
-                var text = await File.ReadAllTextAsync(doc.FilePath, ct);
-                _solution = _solution.WithDocumentText(
-                    doc.Id,
-                    Microsoft.CodeAnalysis.Text.SourceText.From(text));
-                _mtimeCache[doc.Id] = diskMtime;
-                _symbolIndex?.MarkDirty(doc.Id);
-                _invocationIndex?.MarkDirty(doc.Id);
-            }
-
-            // Update InvocationIndex's solution snapshot so dirty re-walks
-            // see the freshly-loaded document text.
-            _invocationIndex?.UpdateSolution(_solution);
-
-            return _solution;
-        }
+        try { return await RefreshUnsafeAsync(ct); }
         finally { _gate.Release(); }
+    }
+
+    private async Task<Solution> RefreshUnsafeAsync(CancellationToken ct)
+    {
+        if (_solution is null || _current is null) throw new InvalidOperationException("Workspace not loaded.");
+
+        foreach (var doc in _solution.Projects.SelectMany(p => p.Documents).ToList())
+        {
+            if (doc.FilePath is null || !File.Exists(doc.FilePath)) continue;
+            var diskMtime = File.GetLastWriteTimeUtc(doc.FilePath);
+            if (_mtimeCache.TryGetValue(doc.Id, out var cachedMtime) && cachedMtime >= diskMtime)
+                continue;
+
+            var text = await File.ReadAllTextAsync(doc.FilePath, ct);
+            _solution = _solution.WithDocumentText(
+                doc.Id,
+                Microsoft.CodeAnalysis.Text.SourceText.From(text));
+            _mtimeCache[doc.Id] = diskMtime;
+            _current.SymbolIndex.MarkDirty(doc.Id);
+            _current.InvocationIndex.MarkDirty(doc.Id);
+        }
+
+        // Update InvocationIndex's solution snapshot so dirty re-walks
+        // see the freshly-loaded document text.
+        _current.InvocationIndex.UpdateSolution(_solution);
+
+        return _solution;
     }
 
     /// <summary>
@@ -144,14 +189,12 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     private async Task LoadUnsafeAsync(CancellationToken ct)
     {
         lock (_diagnosticsLock) _diagnostics.Clear();
-        _symbolIndex = new SymbolIndex();
-        _invocationIndex = new InvocationIndex();
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        _workspace = MSBuildWorkspace.Create();
+        var gen = new Generation(MSBuildWorkspace.Create());
         // RegisterWorkspaceFailedHandler, not the WorkspaceFailed event: the event is obsolete in
         // Roslyn 5.3 (CS0618 on every build) and its replacement no longer forces the UI thread.
-        _workspace.RegisterWorkspaceFailedHandler(e =>
+        gen.Workspace.RegisterWorkspaceFailedHandler(e =>
         {
             // A polyglot solution (.esproj, .njsproj, .sqlproj…) always raises a Failure here.
             // That is expected, not broken, so it gets its own kind instead of reading as a real error.
@@ -163,28 +206,75 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
             log.LogWarning("MSBuild workspace event: {Kind} {Message}", kind, e.Diagnostic.Message);
         });
 
-        _solution = await _workspace.OpenSolutionAsync(options.SolutionPath, cancellationToken: ct);
+        Solution solution;
+        try
+        {
+            solution = await gen.Workspace.OpenSolutionAsync(options.SolutionPath, cancellationToken: ct);
+        }
+        catch
+        {
+            // Nothing was published: the previous generation, if any, keeps serving (WS-006).
+            gen.Workspace.Dispose();
+            gen.Cts.Dispose();
+            throw;
+        }
         log.LogInformation("Loaded {ProjectCount} projects in {Elapsed} ms from {Path}",
-            _solution.Projects.Count(), sw.ElapsedMilliseconds, options.SolutionPath);
+            solution.Projects.Count(), sw.ElapsedMilliseconds, options.SolutionPath);
 
         // Has to happen here, not in the handler: diagnostics arrive during the load, before there
         // is a project list to check them against (WS-004).
-        ReclassifyLoadedProjectDiagnostics(_solution);
+        ReclassifyLoadedProjectDiagnostics(solution);
 
-        // seed mtime cache
-        foreach (var doc in _solution.Projects.SelectMany(p => p.Documents))
+        var mtimes = new Dictionary<DocumentId, DateTime>();
+        foreach (var doc in solution.Projects.SelectMany(p => p.Documents))
         {
             if (doc.FilePath is null || !File.Exists(doc.FilePath)) continue;
-            _mtimeCache[doc.Id] = File.GetLastWriteTimeUtc(doc.FilePath);
+            mtimes[doc.Id] = File.GetLastWriteTimeUtc(doc.FilePath);
         }
 
-        // kick background pre-compilation; do NOT await
-        var solutionSnapshot = _solution;
-        _warmupTask = Task.Run(() => WarmupAsync(solutionSnapshot, ct), ct);
+        // Start warm-up before publishing, so a reader never sees the generation with a completed
+        // placeholder task. Its token is the generation's, not the caller's: warm-up outlives the
+        // request that loaded it, and ends when the generation is retired or disposed.
+        gen.Warmup = Task.Run(() => WarmupAsync(solution, gen));
+
+        var retired = _current;
+        _current = gen;
+        _solution = solution;
+        _mtimeCache = mtimes;
+        if (retired is not null)
+        {
+            lock (_retiring) _retiring.Add(retired);
+            _ = RetireAsync(retired);
+        }
     }
 
-    private async Task WarmupAsync(Solution solution, CancellationToken ct)
+    /// <summary>
+    /// Cancels a replaced generation's warm-up and disposes its workspace after the grace period.
+    /// Whoever removes the generation from <see cref="_retiring"/> disposes it: this method after
+    /// the grace, or <see cref="DisposeAsync"/> if the service is disposed first.
+    /// </summary>
+    private async Task RetireAsync(Generation gen)
     {
+        try
+        {
+            gen.Cts.Cancel();
+            try { await gen.Warmup; }
+            catch (Exception) { /* cancelled or failed — either way it has stopped touching the solution */ }
+            try { await Task.Delay(RetiredWorkspaceGrace, _disposeCts.Token); }
+            catch (OperationCanceledException) { return; } // DisposeAsync took this generation over
+            lock (_retiring) { if (!_retiring.Remove(gen)) return; }
+            gen.Workspace.Dispose();
+            gen.Cts.Dispose();
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Disposing a retired workspace generation failed");
+        }
+    }
+
+    private async Task WarmupAsync(Solution solution, Generation gen)
+    {
+        var ct = gen.Cts.Token;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var tasks = solution.Projects.Select(async project =>
         {
@@ -210,48 +300,57 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
             solution.Projects.Count(),
             sw.ElapsedMilliseconds);
 
-        // Index build runs after compilations are cached so per-project walks
-        // reuse warmed state. Failures isolated; one bad project doesn't
-        // poison the whole index.
-        if (_symbolIndex is not null)
+        if (BeforeIndexBuild is { } hook) await hook();
+
+        // Index build runs after compilations are cached so per-project walks reuse warmed state.
+        // A failure is recorded on the generation rather than swallowed: the indexed tools report
+        // INDEX_UNAVAILABLE instead of answering from a partial index (IDX-002).
+        var indexSw = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var indexSw = System.Diagnostics.Stopwatch.StartNew();
-            try
-            {
-                await _symbolIndex.BuildAsync(solution, ct);
-                log.LogInformation(
-                    "Symbol index built in {Elapsed} ms",
-                    indexSw.ElapsedMilliseconds);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                log.LogWarning(ex, "Symbol index build failed; semantic_search will fall back to live walks");
-            }
+            await gen.SymbolIndex.BuildAsync(solution, ct);
+            log.LogInformation("Symbol index built in {Elapsed} ms", indexSw.ElapsedMilliseconds);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            gen.SymbolIndexFailure = ex;
+            log.LogWarning(ex, "Symbol index build failed; semantic_search/find_registrations/find_dead_code_candidates will report INDEX_UNAVAILABLE");
         }
 
-        if (_invocationIndex is not null)
+        var invIndexSw = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var invIndexSw = System.Diagnostics.Stopwatch.StartNew();
-            try
-            {
-                await _invocationIndex.BuildAsync(solution, ct);
-                log.LogInformation(
-                    "Invocation index built in {Elapsed} ms",
-                    invIndexSw.ElapsedMilliseconds);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                log.LogWarning(ex, "Invocation index build failed; find_entrypoints/find_registrations will be unavailable");
-            }
+            await gen.InvocationIndex.BuildAsync(solution, ct);
+            log.LogInformation("Invocation index built in {Elapsed} ms", invIndexSw.ElapsedMilliseconds);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            gen.InvocationIndexFailure = ex;
+            log.LogWarning(ex, "Invocation index build failed; find_entrypoints/find_registrations will report INDEX_UNAVAILABLE");
         }
     }
 
     public async ValueTask DisposeAsync()
     {
         await _gate.WaitAsync();
-        try { _workspace?.Dispose(); }
+        try
+        {
+            _disposeCts.Cancel(); // retirements still in their grace period stop waiting and yield
+            List<Generation> generations;
+            lock (_retiring) { generations = [.. _retiring]; _retiring.Clear(); }
+            if (_current is not null) generations.Add(_current);
+
+            foreach (var gen in generations)
+            {
+                gen.Cts.Cancel();
+                try { await gen.Warmup; }
+                catch (Exception) { /* cancelled or failed — it has stopped either way */ }
+                gen.Workspace.Dispose();
+                gen.Cts.Dispose();
+            }
+        }
         finally { _gate.Release(); _gate.Dispose(); }
     }
 }

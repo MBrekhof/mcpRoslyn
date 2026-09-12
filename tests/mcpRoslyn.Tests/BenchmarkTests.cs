@@ -161,23 +161,8 @@ public class BenchmarkTests
             Arguments = ["--solution", BpgSolutionPath],
         }));
 
-        // IDX-002: indexed tools answer empty or partial until warm-up finishes, which would
-        // under-measure them. The index fills project by project, so wait for the registration
-        // count to stop growing over three consecutive probes, and refuse to measure on timeout.
-        var deadline = DateTime.UtcNow.AddMinutes(3);
-        int lastLength = -1, stable = 0;
-        while (stable < 3)
-        {
-            if (DateTime.UtcNow > deadline)
-                Assert.Inconclusive("Index did not settle within 3 minutes; sizes would be partial.");
-            var probe = await CallTool(client, "find_registrations",
-                new() { ["includeConsumers"] = false, ["maxResults"] = 10000 });
-            // ponytail: a project whose indexing stalls for 3 s still slips through; IDX-002 makes
-            // indexed tools await warm-up themselves, and this probe can then go.
-            stable = !probe.Failed && probe.Text.Length > 100 && probe.Text.Length == lastLength ? stable + 1 : 0;
-            lastLength = probe.Text.Length;
-            await Task.Delay(1000);
-        }
+        // No readiness probe: indexed tools wait for the index themselves (IDX-002), and every
+        // scenario below gets an unrecorded warm-up call first.
 
         (string Tool, Dictionary<string, object?> Args)[] scenarios =
         [

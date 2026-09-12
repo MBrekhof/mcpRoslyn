@@ -33,13 +33,13 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
 
             var kind = pattern[..colonIdx];
             var target = pattern[(colonIdx + 1)..];
-            var solution = await Workspace.GetFreshSolutionAsync(ct2);
 
             SemanticSearchResult? result = null;
             switch (kind)
             {
                 case "derives-from":
                 {
+                    var solution = await Workspace.GetFreshSolutionAsync(ct2);
                     var targetSym = await FindTypeByDisplayNameAsync(solution, target, ct2);
                     if (targetSym is not INamedTypeSymbol named)
                         return Contracts.ToolResult<SemanticSearchResult>.Fail(
@@ -53,6 +53,7 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
                 }
                 case "implements":
                 {
+                    var solution = await Workspace.GetFreshSolutionAsync(ct2);
                     var targetSym = await FindTypeByDisplayNameAsync(solution, target, ct2);
                     if (targetSym is not INamedTypeSymbol named)
                         return Contracts.ToolResult<SemanticSearchResult>.Fail(
@@ -65,14 +66,23 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
                     break;
                 }
                 case "has-attribute":
-                    result = new SemanticSearchResult(Workspace.SymbolIndex.QueryAttribute(target, solution, ct2));
+                {
+                    var ready = await Workspace.GetIndexedSolutionAsync(ct2);
+                    result = new SemanticSearchResult(ready.SymbolIndex.QueryAttribute(target, ready.Solution, ct2));
                     break;
+                }
                 case "returns":
-                    result = new SemanticSearchResult(Workspace.SymbolIndex.QueryReturnType(target, solution, ct2));
+                {
+                    var ready = await Workspace.GetIndexedSolutionAsync(ct2);
+                    result = new SemanticSearchResult(ready.SymbolIndex.QueryReturnType(target, ready.Solution, ct2));
                     break;
+                }
                 case "parameter-type":
-                    result = new SemanticSearchResult(Workspace.SymbolIndex.QueryParameterType(target, solution, ct2));
+                {
+                    var ready = await Workspace.GetIndexedSolutionAsync(ct2);
+                    result = new SemanticSearchResult(ready.SymbolIndex.QueryParameterType(target, ready.Solution, ct2));
                     break;
+                }
                 default:
                     return Contracts.ToolResult<SemanticSearchResult>.Fail(
                         "INVALID_PATTERN", $"Unknown pattern kind: {kind}");

@@ -11,9 +11,10 @@ public interface IWorkspaceService
     int LoadedProjectCount { get; }
 
     /// <summary>
-    /// Background pre-compilation task kicked off by the most recent <see cref="LoadAsync"/>
-    /// or <see cref="ReloadAsync"/>. Production tool code does not await this; it exists for
-    /// tests and for future hybrid-reload modes that want to block until projects are hot.
+    /// Background pre-compilation and index build of the current workspace generation, kicked off
+    /// by the most recent successful <see cref="LoadAsync"/>/<see cref="ReloadAsync"/>. Cancelled
+    /// when a reload retires the generation. Tools don't await it directly — they go through
+    /// <see cref="GetIndexedSolutionAsync"/>.
     /// </summary>
     Task WarmupTask { get; }
 
@@ -25,16 +26,22 @@ public interface IWorkspaceService
     IReadOnlyList<WorkspaceLoadDiagnostic> Diagnostics { get; }
 
     /// <summary>
-    /// Shared symbol index supporting fast semantic_search has-attribute: / returns: / parameter-type: queries.
-    /// Built during warm-up; queries fall back to walking dirty documents to preserve always-fresh semantics.
+    /// The current generation's symbol index, which may still be building. Tools use
+    /// <see cref="GetIndexedSolutionAsync"/>; this is for tests that have already awaited <see cref="WarmupTask"/>.
     /// Throws InvalidOperationException if accessed before LoadAsync completes.
     /// </summary>
     SymbolIndex SymbolIndex { get; }
 
     /// <summary>
-    /// Index of ASP.NET routes, middleware, hosted services, and DI registrations
-    /// detected by walking syntax trees during warm-up. Same lifecycle as SymbolIndex.
+    /// The current generation's invocation index (routes, middleware, hosted services, DI registrations),
+    /// which may still be building. Tools use <see cref="GetIndexedSolutionAsync"/>.
     /// Throws InvalidOperationException if accessed before LoadAsync completes.
     /// </summary>
     InvocationIndex InvocationIndex { get; }
+
+    /// <summary>
+    /// Waits for the current generation's index build, then returns its freshly refreshed solution
+    /// together with its indexes — the entry point for every indexed tool (WS-006, IDX-002).
+    /// </summary>
+    Task<IndexedSolution> GetIndexedSolutionAsync(CancellationToken ct = default);
 }

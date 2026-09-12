@@ -31,9 +31,8 @@ internal sealed class FindEntrypointsTool(IWorkspaceService ws, ILogger<FindEntr
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
-            // Ensure dirty-doc walk runs before snapshotting the index.
-            await Workspace.GetFreshSolutionAsync(ct2);
-            var index = Workspace.InvocationIndex;
+            // Refreshes the solution (so dirty-doc re-walks see current text) and waits for the index.
+            var index = (await Workspace.GetIndexedSolutionAsync(ct2)).InvocationIndex;
             var truncated = new List<string>();
 
             EntrypointRoute[] routes;

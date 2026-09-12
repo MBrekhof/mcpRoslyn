@@ -58,12 +58,15 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
-            var solution = await Workspace.GetFreshSolutionAsync(ct2);
+            // Solution and indexes from one workspace generation, so references are scanned against
+            // the same load the candidates came from (WS-006).
+            var ready = await Workspace.GetIndexedSolutionAsync(ct2);
+            var solution = ready.Solution;
             // Dirty-walked and de-duplicated by the index itself (IDX-001).
-            var indexed = Workspace.SymbolIndex.AllSymbols(solution, ct2);
+            var indexed = ready.SymbolIndex.AllSymbols(solution, ct2);
 
             // Built once, and only when it will be consulted — it walks the whole DI index.
-            var registered = includePublicTypes ? BuildRegistrationLookup() : null;
+            var registered = includePublicTypes ? BuildRegistrationLookup(ready.InvocationIndex) : null;
 
             int publicSkip = 0, testSkip = 0, denySkip = 0, diSkip = 0, frameworkSkip = 0;
             var truncated = false;
@@ -178,17 +181,17 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
         => symbol.DeclaringSyntaxReferences.Any(d =>
             d.SyntaxTree == location.SourceTree && d.Span.Contains(location.SourceSpan));
 
-    private RegistrationLookup BuildRegistrationLookup()
+    private static RegistrationLookup BuildRegistrationLookup(InvocationIndex index)
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
-        var di = Workspace.InvocationIndex.QueryDi();
+        var di = index.QueryDi();
         foreach (var e in di.Registrations)
         {
             if (e.ServiceType is not null) names.Add(e.ServiceType);
             if (e.ImplType is not null) names.Add(e.ImplType);
         }
         // AddHostedService<T> lands in the hosted-service index, not the DI one.
-        foreach (var h in Workspace.InvocationIndex.QueryHostedServices())
+        foreach (var h in index.QueryHostedServices())
         {
             if (h.ServiceType is not null) names.Add(h.ServiceType);
             if (h.Type is not null) names.Add(h.Type);

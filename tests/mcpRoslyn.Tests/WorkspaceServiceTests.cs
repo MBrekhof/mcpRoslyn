@@ -205,6 +205,125 @@ public class WorkspaceServiceTests
     }
 
     [Test]
+    public async Task Indexed_tool_called_before_warmup_finishes_returns_the_settled_answer()
+    {
+        // IDX-002: the tool must wait for the index, not answer from a half-built one as success.
+        await using var sut = new WorkspaceService(
+            new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath }, NullLogger<WorkspaceService>.Instance);
+        // Hold the index build so the call provably lands before it, however fast the machine is.
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        sut.BeforeIndexBuild = () => release.Task;
+        await sut.LoadAsync();
+        var tool = new mcpRoslyn.Tools.FindRegistrationsTool(sut, NullLogger<mcpRoslyn.Tools.FindRegistrationsTool>.Instance);
+
+        try
+        {
+            var earlyCall = tool.InvokeAsync(includeConsumers: false);
+            await Task.Delay(500);
+            earlyCall.IsCompleted.Should().BeFalse("the index is held unbuilt, so the tool must still be waiting for it");
+
+            release.SetResult();
+            var early = await earlyCall;
+            var settled = await tool.InvokeAsync(includeConsumers: false);
+
+            settled.Result!.Registrations.Should().NotBeEmpty();
+            early.Error.Should().BeNull();
+            early.Result!.Registrations.Should().HaveCount(settled.Result.Registrations.Count);
+        }
+        finally
+        {
+            release.TrySetResult(); // the hook ignores cancellation: a failed assertion must not hang disposal
+        }
+    }
+
+    [Test]
+    public async Task Reload_during_warmup_does_not_mix_generations_into_the_indexes()
+    {
+        // WS-006: the retired warm-up must not build into the new generation's indexes.
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        int cleanRoutes, cleanRegistrations;
+        await using (var clean = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance))
+        {
+            await clean.LoadAsync();
+            await clean.WarmupTask;
+            cleanRoutes = clean.InvocationIndex.QueryRoutes().Count;
+            cleanRegistrations = clean.InvocationIndex.QueryDi().Registrations.Count;
+        }
+
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        // Park the first generation's warm-up just before its index build, reload while it is
+        // parked, let the successor finish, and only then release the retired one.
+        var firstReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var builds = 0;
+        sut.BeforeIndexBuild = () =>
+        {
+            if (Interlocked.Increment(ref builds) != 1) return Task.CompletedTask;
+            firstReached.SetResult();
+            return releaseFirst.Task;
+        };
+
+        await sut.LoadAsync();
+        var firstWarmup = sut.WarmupTask;
+        try
+        {
+            await firstReached.Task;
+            // An indexed query that starts against the parked generation and outlives it.
+            var spanning = sut.GetIndexedSolutionAsync();
+            await sut.ReloadAsync();
+            await sut.WarmupTask;
+            releaseFirst.SetResult();
+            try { await firstWarmup; } catch (OperationCanceledException) { /* retired: cancelled, as intended */ }
+
+            (await spanning).SymbolIndex.Should().BeSameAs(sut.SymbolIndex,
+                "a query waiting on a retired generation must answer from its successor");
+            sut.InvocationIndex.QueryRoutes().Should().HaveCount(cleanRoutes);
+            sut.InvocationIndex.QueryDi().Registrations.Should().HaveCount(cleanRegistrations);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult(); // the hook ignores cancellation: a failed assertion must not hang disposal
+        }
+    }
+
+    [Test]
+    public async Task Failed_reload_keeps_the_previous_generation_usable()
+    {
+        // WS-006: a reload that cannot open the solution must not leave empty indexes behind.
+        await using var sut = new WorkspaceService(
+            new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath }, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+        var solution = await sut.GetFreshSolutionAsync();
+        var before = sut.SymbolIndex.QueryAttribute("TestLib.MyMarkerAttribute", solution).Count;
+        before.Should().BeGreaterThan(0);
+
+        var symbolIndexBefore = sut.SymbolIndex;
+        var hostedBefore = sut.InvocationIndex.QueryHostedServices().Count;
+
+        var hidden = FixturePaths.TestSolutionPath + ".hidden";
+        File.Move(FixturePaths.TestSolutionPath, hidden);
+        try
+        {
+            var reload = () => sut.ReloadAsync();
+            await reload.Should().ThrowAsync<FileNotFoundException>();
+        }
+        finally
+        {
+            File.Move(hidden, FixturePaths.TestSolutionPath);
+        }
+
+        // The same generation still serves. Asserting answers alone isn't enough: the old code
+        // swapped in empty indexes, and the full re-walk its cleared mtime cache then forced
+        // masked that for attribute queries while silently losing hosted-service subclasses.
+        sut.LoadedProjectCount.Should().Be(4);
+        sut.SymbolIndex.Should().BeSameAs(symbolIndexBefore);
+        var ready = await sut.GetIndexedSolutionAsync();
+        ready.InvocationIndex.QueryHostedServices().Should().HaveCount(hostedBefore);
+        ready.SymbolIndex.QueryAttribute("TestLib.MyMarkerAttribute", ready.Solution).Should().HaveCount(before);
+    }
+
+    [Test]
     public async Task ReloadAsync_clears_prior_diagnostics()
     {
         // First load a broken solution to populate diagnostics, then reload pointing

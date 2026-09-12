@@ -192,4 +192,5 @@ internal sealed class DiagnosticTestWorkspace(Solution solution) : IWorkspaceSer
     public IReadOnlyList<mcpRoslyn.Contracts.WorkspaceLoadDiagnostic> Diagnostics => [];
     public SymbolIndex SymbolIndex => throw new NotSupportedException();
     public InvocationIndex InvocationIndex => throw new NotSupportedException();
+    public Task<IndexedSolution> GetIndexedSolutionAsync(CancellationToken ct = default) => throw new NotSupportedException();
 }

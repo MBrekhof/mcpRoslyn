@@ -15,6 +15,10 @@ internal abstract class ToolBase(IWorkspaceService workspace, ILogger logger)
     {
         try { return await body(ct); }
         catch (OperationCanceledException) { throw; }
+        catch (IndexUnavailableException ex)
+        {
+            return ToolResult<T>.Fail("INDEX_UNAVAILABLE", ex.Message, "Call reload_workspace to rebuild the indexes.");
+        }
         catch (FileNotFoundException ex)
         {
             return ToolResult<T>.Fail("FILE_NOT_IN_WORKSPACE", ex.Message);

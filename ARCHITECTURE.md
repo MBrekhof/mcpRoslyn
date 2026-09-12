@@ -29,10 +29,12 @@ stdout is reserved for MCP frames. All logging goes to **stderr** via `ILogger` 
 
 State:
 
-- `MSBuildWorkspace _workspace` — created once, kept open.
-- `Solution _solution` — immutable snapshot; reassigned each refresh.
-- `Dictionary<DocumentId, DateTime> _mtimeCache` — last-seen mtime per doc.
+- `Generation _current` — one load's `MSBuildWorkspace`, `SymbolIndex`, `InvocationIndex`, warm-up task and its cancellation. Built locally and published in one step only after the solution opened (WS-006): a failed reload leaves the previous generation serving, and a warm-up only ever builds into its own generation's indexes. A replaced generation's warm-up is cancelled and its workspace disposed after a 30 s grace.
+- `Solution _solution` — immutable snapshot of the current generation; reassigned each refresh.
+- `Dictionary<DocumentId, DateTime> _mtimeCache` — last-seen mtime per doc, rebuilt with each generation.
 - `SemaphoreSlim _gate` — serializes load/reload/refresh.
+
+Indexed tools go through `GetIndexedSolutionAsync`, which waits for the current generation's warm-up (IDX-002) and returns the refreshed solution together with that same generation's indexes, re-targeting a successor if a reload lands mid-wait — so a tool never pairs one load's solution with another's index. The first indexed query after start or reload blocks until the index is built instead of answering from a partial one, and a failed build surfaces as `INDEX_UNAVAILABLE`. A disposed service disposes every generation, including retired ones still in their grace period. The `SymbolIndex` / `InvocationIndex` properties return the possibly-unfinished index and exist for tests.
 
 Per-call refresh (`GetFreshSolutionAsync`): walk every known `Document`, compare disk mtime to cache, `WithDocumentText` for changed files only. Untouched files reuse existing syntax trees and semantic data. Typical cost: 5–15 ms when nothing changed; +5–20 ms per changed file.
 
@@ -114,7 +116,7 @@ Three layers:
 2. **Tool envelope** (`ToolBase.ExecuteAsync`) — catches `FileNotFoundException`, `InvalidOperationException`, generic `Exception`; returns `ToolError { code, message, hint? }`.
 3. **Empty results** — `find_references` on an unused symbol returns `[]`, not an error. Empty is not failure.
 
-Codes: `WORKSPACE_NOT_LOADED`, `FILE_NOT_IN_WORKSPACE`, `SYMBOL_NOT_FOUND`, `POSITION_INVALID`, `INVALID_PATTERN`, `RENAME_CONFLICT`, `INTERNAL_ERROR`.
+Codes: `WORKSPACE_NOT_LOADED`, `FILE_NOT_IN_WORKSPACE`, `SYMBOL_NOT_FOUND`, `POSITION_INVALID`, `INVALID_PATTERN`, `RENAME_CONFLICT`, `INDEX_UNAVAILABLE`, `INTERNAL_ERROR`.
 
 ## Project layout
 
