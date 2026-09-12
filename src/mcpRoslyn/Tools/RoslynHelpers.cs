@@ -24,7 +24,16 @@ internal static class RoslynHelpers
         Document document, int line, int column, CancellationToken ct)
     {
         var text = await document.GetTextAsync(ct);
-        var position = text.Lines[line - 1].Start + (column - 1);
+        // TOOL-010: unchecked, a column past the end of its line ran on into the following lines,
+        // and every position-taking tool (rename included) would act on a symbol nobody pointed at.
+        if (line < 1 || line > text.Lines.Count)
+            throw new PositionInvalidException(
+                $"Line {line} is outside {document.FilePath} (valid: 1-{text.Lines.Count}).");
+        var lineSpan = text.Lines[line - 1].Span;
+        if (column < 1 || column > lineSpan.Length + 1)
+            throw new PositionInvalidException(
+                $"Column {column} is outside line {line} of {document.FilePath} (valid: 1-{lineSpan.Length + 1}).");
+        var position = lineSpan.Start + (column - 1);
         var semantic = await document.GetSemanticModelAsync(ct);
         if (semantic is null) return null;
 
@@ -80,6 +89,9 @@ internal static class RoslynHelpers
             EndLine: span.EndLinePosition.Line + 1,
             EndColumn: span.EndLinePosition.Character + 1);
     }
+
+    /// <summary>A 1-based line/column outside the document; ToolBase maps it to POSITION_INVALID (TOOL-010).</summary>
+    internal sealed class PositionInvalidException(string message) : Exception(message);
 
     public static Contracts.SymbolInfo ToSymbolInfo(ISymbol symbol)
         => new(

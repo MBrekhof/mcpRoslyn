@@ -15,6 +15,10 @@ internal abstract class ToolBase(IWorkspaceService workspace, ILogger logger)
     {
         try { return await body(ct); }
         catch (OperationCanceledException) { throw; }
+        catch (RoslynHelpers.PositionInvalidException ex)
+        {
+            return ToolResult<T>.Fail("POSITION_INVALID", ex.Message);
+        }
         catch (IndexUnavailableException ex)
         {
             return ToolResult<T>.Fail("INDEX_UNAVAILABLE", ex.Message, "Call reload_workspace to rebuild the indexes.");
