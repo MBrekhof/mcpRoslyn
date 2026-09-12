@@ -253,7 +253,11 @@ mcpRoslyn answers on a branch with compile errors on the floor.
   So "expensive" above is the *first* call, and a per-(TFM, analyzers) cache is what makes default-on affordable —
   worth reading `Source/App/Morris.Roslynk/Features/Diagnostics/` before deciding on opt-in vs default-on here.
 
-- [ ] **PERF-002: Measure per-tool response size — token cost is a design metric.** (ID: 1312) — **Todo, est. 1 h**
+- [x] ~~**PERF-002: Measure per-tool response size — token cost is a design metric.**~~ (ID: 1312)
+  Done 2026-09-13 (`9e313ac`). Measured all 20 tools against BPG through the real stdio MCP client (`BenchmarkTests.Tool_response_sizes`); results and the not-changed list are in [`docs/acceptance/2026-09-13-perf-002-response-sizes.md`](docs/acceptance/2026-09-13-perf-002-response-sizes.md). One representative call each: **261 207 → 88 101 chars** (~65k → ~22k tokens).
+
+  The big one was a bug, not a default: `rename_symbol`'s preview carried every changed file whole, twice — 142 606 chars for a 16-occurrence rename, now 3 606 (`Document.GetTextChangesAsync` instead of `SourceText.GetTextChanges`). `workspace_symbol`'s default cap went 100 → 25 (43 066 → 8 942) and `semantic_search` got a cap (50); both report `Truncated`. Not changed, with reasons in the doc: JSON escaping (4%), `find_registrations`, `SymbolInfo` verbosity (a ~10-tool contract change that wants VAL-001 evidence), and `analyze_symbol` (884 tokens — the capsule shape below isn't justified yet). Two Codex review rounds (summary-mode truncation, harness failure detection and readiness probe, negative cap); final pass clean.
+
   Measurement, not a feature. Every response is spent from the agent's context budget and we have never measured any
   of them. Serialize a representative call to each of the 20 tools against BPG, record bytes and approximate tokens,
   and change *defaults* where the numbers justify it — `analyze_symbol` returns five things at once, and
