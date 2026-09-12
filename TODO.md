@@ -297,6 +297,115 @@ violated its own documented "dependency-free" rule). `project_overview` already 
 and it already caught that violation on the first call. The data is exposed; wrapping a rules engine around it is
 rebuilding NDepend badly.
 
+## Spotted in real-session use (Electron.NET, 2026-09-01)
+
+- [ ] **WS-005: Allow selecting which solution to load — workspace pinned to one sln misses sibling projects.** (ID: 1451)
+  Observed 2026-09-01 in an Electron.NET session (repo C:\Projects\Electron.NET). The repo has three solutions: `src/ElectronNET.Lean.sln` (4 library projects), `src/ElectronNET.sln` (full: + IntegrationTests, WebApp, ConsoleApp, samples), and a standalone sample sln. The server auto-loaded the Lean sln, so every symbol query (workspace_symbol, find_references, ...) was blind to the test and app projects for the whole session.
+
+  Verified there is no escape hatch: `reload_workspace` takes no parameters — it re-evaluates the already-chosen solution. Which sln gets picked at startup is not controllable per session.
+
+  Wanted:
+  - a) `reload_workspace(solutionPath)` (or a dedicated `load_solution`) to switch mid-session, and/or
+  - b) startup selection: prefer the sln that transitively covers the most projects when several exist, and report which one was chosen (project_overview already returns solutionPath — good, keep that).
+
+  Acceptance: in the Electron.NET repo, a session can get `workspace_symbol` hits in ElectronNET.IntegrationTests without restarting the server.
+
+  Non-goal noted for the record: Razor/Blazor semantic support was discussed the same session and deliberately NOT carded — no measured pain yet, and it would be a large build (Razor generated-document mapping). Card it only when a session is actually bitten.
+
+## From the Codex review (2026-09-12)
+
+Whole-project read-only review by Codex, verbatim in [`docs/reviews/2026-09-12-codex-review.md`](docs/reviews/2026-09-12-codex-review.md).
+All 24 findings were checked against the source and held; grouped into ten cards by shared fix. WS-006 + IDX-002
+are the pair to do first — together they are "indexed tools can answer wrong, as success".
+
+- [ ] **WS-006: Reload is not atomic — a running warm-up or a failed reload corrupts the index generation.** (ID: 1641)
+  From the 2026-09-12 Codex review (`docs/reviews/2026-09-12-codex-review.md`, findings 3, 5, 6), verified against the code.
+
+  `LoadUnsafeAsync` publishes new state piecemeal into mutable fields, and `WarmupAsync` reads those fields rather than the instances it was started with:
+  - **Reload during warm-up** (`WorkspaceService.cs:216-238`): an outgoing warm-up that reaches its index step after `reload_workspace` swapped `_symbolIndex`/`_invocationIndex` builds the *new* indexes from the *old* solution, and then the new warm-up builds into them as well. `InvocationIndex` has no de-dup, so routes/registrations appear twice; stale `SymbolIndex` entries carry old-workspace `DocumentId`s that never intersect the dirty set, so nothing evicts them.
+  - **Failed reload** (`:147-166`): indexes and `_workspace` are replaced before `OpenSolutionAsync`. If it throws or is cancelled, `_solution` is still the old solution but the indexes are empty and no warm-up runs — every indexed tool returns nothing until a reload succeeds.
+  - **Leak** (`:151`): each reload overwrites `_workspace` without disposing the old `MSBuildWorkspace` (only `CloseSolution()`), and nothing cancels the outgoing warm-up, which keeps compiling a retired solution.
+
+  Fix: build the generation (workspace, solution, both indexes, mtime cache, warm-up CTS) in locals, publish it in one assignment only after the load succeeds, pass the index instances into `WarmupAsync`, then cancel and dispose the outgoing generation. Do together with IDX-002 — its readiness signal belongs to the generation.
+  Test: reload while the first warm-up is still running; `find_registrations` counts must match a single clean load.
+- [ ] **IDX-002: Indexed tools silently return empty results until warm-up finishes.** (ID: 1642)
+  From the 2026-09-12 Codex review (finding 4), verified against the code.
+
+  No production code awaits `IWorkspaceService.WarmupTask` — only tests do, and `TestHost.cs:56-60` waits it away with a comment describing exactly this race. `semantic_search` (has-attribute/returns/parameter-type), `find_registrations`, `find_entrypoints` and `find_dead_code_candidates` read `SymbolIndex`/`InvocationIndex` directly, so a call in the first seconds after start or reload gets a partial or empty list **reported as success**. `InvocationIndex` takes ~1.7 s on BPG and 6-12 s on duetGPT, so "no DI registrations" is a plausible wrong answer to an agent's very first question. If an index build throws, it is logged and the empty index is served for the rest of the session.
+
+  The v1.2 acceptance doc (`docs/acceptance/2026-05-16-v1.2-symbolindex-acceptance.md:46`) says a query "will await the in-flight WarmupTask" — it does not. Correct the doc with the fix.
+
+  Fix (smallest honest version): await the warm-up with the request's CancellationToken in the indexed tools before querying, and return `INDEX_UNAVAILABLE` if the build faulted (needs a faulted flag — `WarmupAsync` swallows build exceptions, so `WarmupTask` itself completes successfully). Pairs with WS-006.
+  Test: query before warm-up completes and assert the full result, not an empty one.
+- [ ] **TOOL-008: `rename_symbol` applyEdits can overwrite concurrent edits and leave a half-applied rename.** (ID: 1643)
+  From the 2026-09-12 Codex review (findings 1, 2), verified against the code. Codex rated it high; for a single-user server the race window is narrow, so medium — but the failure mode is lost work.
+
+  `RenameSymbolTool.cs:84-91` writes each changed file's *entire* text from the snapshot taken by `GetFreshSolutionAsync` at the start of the call. No lock spans compute → write, and nothing checks the file is still the version that was renamed:
+  - a file saved by the editor (or another tool call) in that window is silently overwritten with the pre-edit text plus the rename;
+  - a failure part-way (read-only file, cancellation) leaves earlier files renamed and later ones not, and the error result doesn't say which were written;
+  - `File.WriteAllTextAsync` writes UTF-8 without BOM, so a file that had a BOM or another encoding changes encoding on every rename.
+
+  Fix: before writing, re-read each target and compare it to the snapshot text — reject with `STALE_FILE` naming the file if it changed; write only after every check passes; on a write failure report the files already written. Preserve the original file's encoding/BOM.
+- [ ] **IDX-003: InvocationIndex refresh drops BackgroundService subclasses; build still walks referenced assemblies.** (ID: 1644)
+  From the 2026-09-12 Codex review (findings 8, 19), verified against the code.
+
+  `RefreshDirty` (`InvocationIndex.cs:168`) removes *all* hosted-service entries for a dirty document, including `Kind: "subclass"`, but re-indexes through `IndexDocument`, which only sees `AddHostedService<T>` calls — subclass detection lives only in `BuildAsync` (`:76`). Touching a worker's file (a comment is enough) makes it vanish from `find_entrypoints` until `reload_workspace`.
+
+  The same `BuildAsync` loop walks `compilation.GlobalNamespace` — every referenced assembly — per project: the waste PERF-001 removed from `SymbolIndex`, in the index that is now the dominant warm-up cost.
+
+  Fix (one change covers both): move subclass detection into `IndexDocument` — for each `ClassDeclarationSyntax`, `GetDeclaredSymbol` + `IsBackgroundServiceSubclass`, de-duped for partial classes — and delete the namespace walk. Measure with an interleaved in-process A/B on BPG, as PERF-001 did.
+  Test: bump `PollingWorker.cs`'s mtime, query, assert the subclass entry survives.
+- [ ] **IDX-004: Dirty-document refresh — SymbolIndex never clears its dirty set; InvocationIndex refresh is not atomic.** (ID: 1645)
+  From the 2026-09-12 Codex review (findings 7, 9, 10, 18), verified against the code.
+
+  - `SymbolIndex._dirty` is only ever added to (`SymbolIndex.cs:63-66`). Every `semantic_search`/dead-code/`find_registrations` query re-walks *every* document edited since load, synchronously (`GetSemanticModelAsync(...).GetAwaiter().GetResult()`, `:172`), and `find_registrations` does it twice per registration (`FindRegistrationsTool.cs:88-93`). Query cost grows with the session's edit history — worst in exactly the edit-heavy sessions VAL-001 is about.
+  - `InvocationIndex.RefreshDirty` (`InvocationIndex.cs:151-181`) clears the dirty set, removes the doc's entries, *then* re-binds, outside `GetFreshSolutionAsync`'s gate. Two parallel tool calls: the second sees neither old nor new entries. If the re-bind throws, the entries are gone and the dirty marker already discarded, so they don't return until reload.
+  - Freshness is `cachedMtime >= diskMtime` (`WorkspaceService.cs:66`): restoring a file with an older timestamp (a copy or unpack that preserves times) is treated as unchanged. `!=` fixes it.
+  - Known ceiling, record rather than fix: dirtiness is per document, but semantics cross documents — changing a `global using` alias or a type's namespace in file A changes the index keys of unchanged file B. Note it in ARCHITECTURE; `reload_workspace` clears it.
+
+  Fix: rebuild changed-doc entries into locals and swap them in under the lock, clearing the dirty marker only after a successful swap; have `SymbolIndex` fold re-walked entries back into its buckets and clear the marker; make the walks async with the request's token.
+- [ ] **TOOL-009: `find_entrypoints` treats any method named Map/MapGet/AddHostedService as an endpoint.** (ID: 1646)
+  From the 2026-09-12 Codex review (findings 14, 15), verified against the code.
+
+  `IndexDocument` classifies routes by method *name* (`InvocationIndex.cs:194`), and `TryBuildRoute` (`:246`) takes a `SemanticModel` it never uses. `Map` is also AutoMapper's API — every `_mapper.Map<Dto>(entity)` in a real app is reported as an `ANY` route with the entity as its "handler". `TryBuildHostedService` (`:280`) likewise accepts any generic method named `AddHostedService`.
+
+  `MapMethods("/x", new[] { "GET", "HEAD" }, Handler)` reports verb `ANY` and the method array as the handler, because the handler is assumed to be argument 2 (`:262`).
+
+  Fix: bind the invocation and require an extension on `IEndpointRouteBuilder` — the same approach `IsServiceCollectionCall` already takes for DI (reuse it for `AddHostedService`). For `MapMethods` take the handler from argument 3 and report the literal methods. Binding only runs for the seven route names, so warm-up impact should be small — confirm on BPG.
+  Test: a negative fixture in TestWeb with an AutoMapper-style `Map<T>(x)` call.
+- [ ] **IDX-005: Symbol de-dup by documentation-comment ID collapses distinct symbols from different projects.** (ID: 1647)
+  From the 2026-09-12 Codex review (finding 13), verified against the code.
+
+  `MergeWithDirtyWalk` de-dups on `SymbolId` (`SymbolIndex.cs:164`), which is `DocumentationCommentId.CreateDeclarationId` — no assembly identity. Two projects declaring the same fully-qualified name collapse to one entry. The common case is not exotic: every top-level-statements project has a global `Program` (`T:Program`). `find_dead_code_candidates` then sees only one of them, and `ResolveSymbolByIdAsync` (`RoslynHelpers.cs:43`) returns whichever project enumerates first.
+
+  The de-dup exists for a real reason (IDX-001/TOOL-006: a referenced project's source symbols appear once per referencing compilation), so the new key must still merge those.
+
+  Fix: de-dup on `SymbolId` + primary declaration file path — the same symbol seen through two compilations shares its source location; two distinct symbols don't. In `ResolveSymbolByIdAsync`, return `AMBIGUOUS_SYMBOL_ID` listing candidate locations when an id resolves to symbols with different source locations.
+  Test: fixture with two projects that each declare `Program`.
+- [ ] **TOOL-010: Line/column are not validated — an out-of-range column resolves a symbol on a later line.** (ID: 1648)
+  From the 2026-09-12 Codex review (finding 12), verified against the code.
+
+  `ResolveSymbolAtPositionAsync` (`RoslynHelpers.cs:25`) computes `text.Lines[line - 1].Start + (column - 1)` with no bounds check. A column past the end of the line silently lands on a following line, so `goto_definition`/`hover`/`find_callers` answer about the wrong symbol — and `rename_symbol` with `applyEdits=true` renames it. A bad line throws `ArgumentOutOfRangeException`, surfaced as `INTERNAL_ERROR` instead of `POSITION_INVALID` (a code the tools already use). Agents do produce off-by-some columns, so this matters more than it looks.
+
+  Fix: validate `1 <= line <= Lines.Count` and `1 <= column <= lineLength + 1` in the helper that every position-taking tool routes through, and return `POSITION_INVALID`.
+- [ ] **DIAG-002: `get_compilation_errors` over-promises and silently ignores some inputs.** (ID: 1649)
+  From the 2026-09-12 Codex review (findings 17, 21, 22), verified against the code.
+
+  - The description says "equivalent to 'would dotnet build succeed?'", but only loaded projects are compiled. A project that failed to load (kind `Failure` in the workspace diagnostics) contributes nothing, so a broken solution can report `0 errors, 0 warnings`. Carry a not-loaded count in the result and reword the description.
+  - An unknown `projectName` returns an empty success (`GetCompilationErrorsTool.cs:33`) — return `PROJECT_NOT_FOUND`.
+  - `excludeDiagnosticSources` is advertised on both diagnostic tools and discarded (`:85-87`). Remove it; re-add if DIAG-001 introduces a real source field.
+  - `severity: "Info"` or `"Hidden"` is always filtered out by the default `minimumSeverity: "Warning"` (`:52`). An explicit exact severity should bypass the threshold.
+
+  Touches the same filters as DIAG-001 — do this first or together.
+- [ ] **TOOL-011: Low-severity sweep from the 2026-09-12 Codex review.** (ID: 1650)
+  From the 2026-09-12 Codex review (findings 11, 16, 20, 23, 24), verified against the code. Each is small; batched.
+
+  - `analyze_symbol` returns `Implementations: null` for interface/abstract **members** — `AnalyzeSymbolTool.cs:151` gates on `INamedTypeSymbol`, while `find_implementations` handles members. Drop the gate for implementable members.
+  - `list_document_symbols` omits delegates, indexers and enum members (`ListDocumentSymbolsTool.cs:43`: `IndexerDeclarationSyntax` is not a `PropertyDeclarationSyntax`, `DelegateDeclarationSyntax` not a `BaseTypeDeclarationSyntax`). Match `BasePropertyDeclarationSyntax`, `DelegateDeclarationSyntax`, `EnumMemberDeclarationSyntax`.
+  - `SolutionDiscovery.SolutionsIn` calls `GetFiles` outside the `UnauthorizedAccessException`/`DirectoryNotFoundException` guard (`SolutionDiscovery.cs:28`, `:43`), so an unreadable directory aborts discovery instead of being skipped.
+  - Tool failures come back as a normal `ToolResult` payload, so the MCP response's `isError` stays false (`ToolBase.cs`, `ToolError.cs`). Agents read the in-band `Error` fine; a client keyed on `isError` doesn't. **Unverified SDK claim** — confirm against ModelContextProtocol 1.3.0 with one stdio-level test first; if it holds, return `CallToolResult { IsError = true }` carrying the same payload.
+  - Tests: `WorkspaceServiceTests` constructs `WorkspaceService` without `await using` (e.g. `:25`, `:36`), some tests return with warm-up still running, and `TestHost` never disposes its `ServiceProvider` (`TestHost.cs:67`).
+
 ## Real-session validation (still to do)
 
 - [ ] **VAL-001: Use mcpRoslyn in one feature-sized task.** (ID: 1171) — **in Todo, est. 4 h**
