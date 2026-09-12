@@ -410,7 +410,9 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
 
   Fix: de-dup on `SymbolId` + primary declaration file path — the same symbol seen through two compilations shares its source location; two distinct symbols don't. In `ResolveSymbolByIdAsync`, return `AMBIGUOUS_SYMBOL_ID` listing candidate locations when an id resolves to symbols with different source locations.
   Test: fixture with two projects that each declare `Program`.
-- [ ] **TOOL-010: Line/column are not validated — an out-of-range column resolves a symbol on a later line.** (ID: 1648)
+- [x] ~~**TOOL-010: Line/column are not validated — an out-of-range column resolves a symbol on a later line.**~~ (ID: 1648)
+  Done 2026-09-13 (`0a989bd`). `ResolveSymbolAtPositionAsync` — the one helper all ten position-taking tools route through — now requires line `1..Lines.Count` and column `1..lineLength + 1` (the cursor just past the last character stays valid; line spans exclude CRLF, so empty lines and an unterminated last line behave) and throws `PositionInvalidException`, which `ToolBase` maps to `POSITION_INVALID`. No call site changed. Codex review: no findings; its one coverage note (the end-of-line case also accepted `INTERNAL_ERROR`) was tightened.
+
   From the 2026-09-12 Codex review (finding 12), verified against the code.
 
   `ResolveSymbolAtPositionAsync` (`RoslynHelpers.cs:25`) computes `text.Lines[line - 1].Start + (column - 1)` with no bounds check. A column past the end of the line silently lands on a following line, so `goto_definition`/`hover`/`find_callers` answer about the wrong symbol — and `rename_symbol` with `applyEdits=true` renames it. A bad line throws `ArgumentOutOfRangeException`, surfaced as `INTERNAL_ERROR` instead of `POSITION_INVALID` (a code the tools already use). Agents do produce off-by-some columns, so this matters more than it looks.
