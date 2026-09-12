@@ -62,8 +62,13 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
             // the same load the candidates came from (WS-006).
             var ready = await Workspace.GetIndexedSolutionAsync(ct2);
             var solution = ready.Solution;
-            // Dirty-walked and de-duplicated by the index itself (IDX-001).
-            var indexed = ready.SymbolIndex.AllSymbols(solution, ct2);
+            // Dirty-walked and de-duplicated by the index itself (IDX-001). The index keeps a file linked
+            // into several assemblies as one symbol per assembly; here the unit is the declaration you
+            // would delete, so those merge into one entry spanning all its declaring projects (IDX-005).
+            var indexed = ready.SymbolIndex.AllSymbols(solution, ct2)
+                .GroupBy(e => (e.SymbolId, File: e.Info.PrimaryLocation?.FilePath))
+                .Select(g => (Entry: g.First(), DeclaringDocs: g.SelectMany(e => e.DeclaringDocs).ToArray()))
+                .ToList();
 
             // Built once, and only when it will be consulted — it walks the whole DI index.
             var registered = includePublicTypes ? BuildRegistrationLookup(ready.InvocationIndex) : null;
@@ -72,20 +77,27 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
             var truncated = false;
             var candidates = new List<DeadCodeCandidate>();
 
-            foreach (var entry in indexed)
+            foreach (var (entry, declaringDocs) in indexed)
             {
                 ct2.ThrowIfCancellationRequested();
-
-                // Resolve back to ISymbol for accessibility / attribute / containing-project checks
-                var symbol = await RoslynHelpers.ResolveSymbolByIdAsync(solution, entry.SymbolId, ct2);
-                if (symbol is null) continue;
 
                 // Path / test filter
                 var loc = entry.Info.PrimaryLocation;
                 if (loc is null) continue;
+
+                // Resolve back to ISymbol for accessibility / attribute / containing-project checks — this
+                // declaration's own symbol(s), not whichever project first shares its id (IDX-005). A
+                // linked file or a multi-targeted project yields one per project, and #if can make them
+                // differ, so every judgement leans towards keeping the code: the most exposed copy decides
+                // accessibility, it is test code only if every copy is, a denylisted attribute or a
+                // reference on ANY copy spares it, and any medium-confidence copy makes it medium.
+                var copies = await RoslynHelpers.ResolveDeclaredSymbolsAsync(
+                    solution, declaringDocs, entry.SymbolId, loc.FilePath, ct2);
+                if (copies.Count == 0) continue;
+                var symbol = copies.OrderByDescending(c => ExposureRank(c.DeclaredAccessibility)).First();
                 if (excludePaths is not null && excludePaths.Any(p => loc.FilePath.Contains(p, StringComparison.OrdinalIgnoreCase))) continue;
 
-                var inTestProject = IsInTestProject(symbol, solution);
+                var inTestProject = copies.All(c => IsInTestProject(c, solution));
                 if (inTestProject && !includeTests) { testSkip++; continue; }
 
                 var isPublicSurface = symbol.DeclaredAccessibility is Accessibility.Public
@@ -102,7 +114,8 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
                         : null;
                     if (publicType is null) { publicSkip++; continue; }
                     if (registered!.Covers(publicType)) { diSkip++; continue; }
-                    if (IsFrameworkReached(publicType)) { frameworkSkip++; continue; }
+                    // Per copy: #if can give only one project's copy the extension methods that reach it.
+                    if (copies.OfType<INamedTypeSymbol>().Any(IsFrameworkReached)) { frameworkSkip++; continue; }
                 }
                 else
                 {
@@ -114,7 +127,7 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
                     if (isInternalLevel && !includeInternalTypes) continue;
                 }
 
-                if (IsDenylisted(symbol)) { denySkip++; continue; }
+                if (copies.Any(IsDenylisted)) { denySkip++; continue; }
 
                 // Everything above is cheap; the reference scan is not. Once the result set is full
                 // we keep classifying so the Skipped counters stay accurate, and stop paying for
@@ -124,13 +137,21 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
                 // Reference scan. For a public type, references from inside its own declaration
                 // (a static factory naming itself, a nested helper) are not evidence that anything
                 // else uses it.
-                var refs = await SymbolFinder.FindReferencesAsync(symbol, solution, ct2);
-                var referenced = isPublicSurface
-                    ? refs.Any(r => r.Locations.Any(l => !IsInsideOwnDeclaration(symbol, l.Location)))
-                    : refs.Any(r => r.Locations.Any());
+                // A linked declaration is dead only if no assembly compiling it uses its copy.
+                var referenced = false;
+                foreach (var copy in copies)
+                {
+                    var refs = await SymbolFinder.FindReferencesAsync(copy, solution, ct2);
+                    referenced = isPublicSurface
+                        ? refs.Any(r => r.Locations.Any(l => !IsInsideOwnDeclaration(copy, l.Location)))
+                        : refs.Any(r => r.Locations.Any());
+                    if (referenced) break;
+                }
                 if (referenced) continue;
 
-                var confidence = isPublicSurface ? "medium" : ComputeConfidence(symbol, solution);
+                var confidence = isPublicSurface || copies.Any(c => ComputeConfidence(c, solution) != "high")
+                    ? "medium"
+                    : "high";
                 var reason = isPublicSurface
                     ? "public-type-no-references-outside-own-declaration-and-not-di-registered"
                     : confidence == "high" ? "no-references" : "no-references-but-internals-visible-to-friends";
@@ -229,6 +250,16 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
 
         private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
     }
+
+    private static int ExposureRank(Accessibility accessibility) => accessibility switch
+    {
+        Accessibility.Public => 5,
+        Accessibility.ProtectedOrInternal => 4,
+        Accessibility.Protected => 3,
+        Accessibility.Internal => 2,
+        Accessibility.ProtectedAndInternal => 1,
+        _ => 0,
+    };
 
     private static bool IsDenylisted(ISymbol symbol)
     {

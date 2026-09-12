@@ -54,7 +54,8 @@ internal sealed class WorkspaceSymbolTool(IWorkspaceService ws, ILogger<Workspac
                         if (!allowedKinds.Contains(classifier)) continue;
                     }
 
-                    if (!dedup.Add(info.SymbolId)) continue;
+                    // Id plus file: same-named types in different projects share an id (IDX-005).
+                    if (!dedup.Add($"{info.SymbolId}|{info.PrimaryLocation?.FilePath}")) continue;
                     // A match past the cap is what makes the result truncated, not reaching it.
                     if (results.Count >= cap) { truncated = true; break; }
                     results.Add(info);

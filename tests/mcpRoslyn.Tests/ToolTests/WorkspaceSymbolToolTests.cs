@@ -38,6 +38,16 @@ public class WorkspaceSymbolToolTests
     }
 
     [Test]
+    public async Task WorkspaceSymbol_lists_same_named_types_from_two_projects_separately()
+    {
+        // IDX-005: Shared.Dup is declared in TestApp and in TestWeb; both share "T:Shared.Dup".
+        await using var host = await TestHost.CreateAsync<WorkspaceSymbolTool>();
+        var result = await host.Tool.InvokeAsync("Dup", null, null, ct: CancellationToken.None);
+
+        result.Result!.Symbols.Where(s => s.SymbolId == "T:Shared.Dup").Should().HaveCount(2);
+    }
+
+    [Test]
     public async Task WorkspaceSymbol_reports_truncation_only_when_more_matched()
     {
         await using var host = await TestHost.CreateAsync<WorkspaceSymbolTool>();

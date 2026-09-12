@@ -63,5 +63,28 @@ public class FindReferencesToolTests
         secondKeys.Should().Equal(firstKeys, "two back-to-back calls with no workspace changes must yield the same reference set");
     }
 
+    [Test]
+    public async Task SymbolId_naming_distinct_types_in_two_projects_is_AMBIGUOUS_not_the_first_one()
+    {
+        // IDX-005: "T:Shared.Dup" names a type in TestApp and another in TestWeb.
+        await using var host = await TestHost.CreateAsync<FindReferencesTool>();
+        var result = await host.Tool.InvokeAsync(filePath: null, line: null, column: null, symbolId: "T:Shared.Dup",
+            ct: CancellationToken.None);
+
+        result.Error.Should().NotBeNull();
+        result.Error!.Code.Should().Be("AMBIGUOUS_SYMBOL_ID");
+        result.Error.Message.Should().Contain(Path.Combine("TestApp", "Dup.cs")).And.Contain(Path.Combine("TestWeb", "Dup.cs"));
+
+        // A file linked into both projects declares two symbols at one path — still ambiguous.
+        var linked = await host.Tool.InvokeAsync(filePath: null, line: null, column: null, symbolId: "T:Shared.Linked",
+            ct: CancellationToken.None);
+        linked.Error!.Code.Should().Be("AMBIGUOUS_SYMBOL_ID");
+
+        // A symbol seen through several compilations (TestLib, referenced by others) is not ambiguous.
+        var single = await host.Tool.InvokeAsync(filePath: null, line: null, column: null, symbolId: "T:TestLib.IGreeter",
+            ct: CancellationToken.None);
+        single.Error.Should().BeNull();
+    }
+
     private static string Key(SymbolLocation l) => $"{l.FilePath}|{l.Line}:{l.Column}-{l.EndLine}:{l.EndColumn}";
 }

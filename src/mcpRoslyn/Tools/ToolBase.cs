@@ -15,6 +15,11 @@ internal abstract class ToolBase(IWorkspaceService workspace, ILogger logger)
     {
         try { return await body(ct); }
         catch (OperationCanceledException) { throw; }
+        catch (RoslynHelpers.AmbiguousSymbolIdException ex)
+        {
+            return ToolResult<T>.Fail("AMBIGUOUS_SYMBOL_ID", ex.Message,
+                "Pass filePath/line/column on the declaration you mean instead of symbolId; a file linked into several projects resolves in the first project that compiles it.");
+        }
         catch (RoslynHelpers.PositionInvalidException ex)
         {
             return ToolResult<T>.Fail("POSITION_INVALID", ex.Message);

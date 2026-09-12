@@ -22,7 +22,7 @@ public sealed class SymbolIndex
             foreach (var sym in WalkAllSymbols(compilation))
             {
                 ct.ThrowIfCancellationRequested();
-                var declaringDocs = sym.Locations
+                var declaringDocs = AllPartLocations(sym)
                     .Where(l => l.IsInSource && l.SourceTree is not null)
                     .Select(l => solution.GetDocumentId(l.SourceTree))
                     .Where(id => id is not null)
@@ -116,9 +116,8 @@ public sealed class SymbolIndex
     /// <summary>
     /// Every indexed symbol, through the same dirty-walk the pattern queries use: entries whose
     /// declaring documents have changed since the build are dropped and re-walked live (IDX-001).
-    /// Results are de-duplicated by symbol id — a project reference pulls the referenced project's
-    /// source symbols into the referencing compilation, so the build indexes them once per
-    /// referencing project.
+    /// Results are de-duplicated by symbol id, declaration file and declaring assembly, so the same
+    /// symbol is listed once while same-named symbols from different assemblies stay apart (IDX-005).
     /// </summary>
     public IReadOnlyList<IndexedSymbol> AllSymbols(Solution currentSolution, CancellationToken ct = default)
     {
@@ -156,15 +155,56 @@ public sealed class SymbolIndex
         CancellationToken ct)
     {
         var results = new List<IndexedSymbol>();
-        var seen = new HashSet<string>();
-
-        foreach (var entry in bucket)
+        // A documentation-comment id carries no assembly identity: two projects each declaring
+        // Acme.Options share "T:Acme.Options" (every top-level-statements project's Program does), and a
+        // file linked into two projects declares it at the same path in both. So the key adds the
+        // declaration file AND the declaring assembly — which still collapses a multi-targeted project
+        // (Foo(net8.0)/Foo(net10.0) share an assembly name) (IDX-005). ponytail: two unrelated projects
+        // that link the same file AND share an assembly name still collapse; no solution we load does.
+        var positions = new Dictionary<(string SymbolId, string? FilePath, string? Assembly), int>();
+        (string, string?, string?) Key(string symbolId, Contracts.SymbolInfo info, DocumentId? doc)
+            => (symbolId, info.PrimaryLocation?.FilePath,
+                doc is null ? null : currentSolution.GetProject(doc.ProjectId)?.AssemblyName);
+        var mergedDocs = new Dictionary<int, HashSet<DocumentId>>();
+        void AddOrMerge((string, string?, string?) key, IndexedSymbol entry)
         {
-            if (entry.DeclaringDocs.Overlaps(dirty)) continue;
-            if (seen.Add(entry.SymbolId)) results.Add(entry);
+            if (positions.TryGetValue(key, out var at))
+            {
+                // The same declaration seen again — another project of the same assembly (a
+                // multi-targeted project), or another file of a partial type: one entry, but every
+                // declaring document kept, so callers can reach each copy (#if can make them differ).
+                // Copied once and then grown in place: a partial type spread over many files would
+                // otherwise re-copy the whole set on each of its files.
+                if (!mergedDocs.TryGetValue(at, out var docs))
+                {
+                    docs = new HashSet<DocumentId>(results[at].DeclaringDocs); // the cached set is the index's own
+                    mergedDocs[at] = docs;
+                    results[at] = results[at] with { DeclaringDocs = docs };
+                }
+                docs.UnionWith(entry.DeclaringDocs);
+            }
+            else
+            {
+                positions[key] = results.Count;
+                results.Add(entry);
+            }
         }
 
-        foreach (var docId in dirty)
+        // Re-walk live: the dirty documents, plus every other file declaring an entry a dirty file
+        // invalidated — delete a partial method's optional implementation, and its surviving
+        // definition lives in a file that did not change.
+        var walk = new HashSet<DocumentId>(dirty);
+        foreach (var entry in bucket)
+        {
+            if (entry.DeclaringDocs.Overlaps(dirty))
+            {
+                walk.UnionWith(entry.DeclaringDocs);
+                continue;
+            }
+            AddOrMerge(Key(entry.SymbolId, entry.Info, entry.DeclaringDocs.FirstOrDefault()), entry);
+        }
+
+        foreach (var docId in walk)
         {
             var doc = currentSolution.GetDocument(docId);
             if (doc is null) continue;
@@ -172,18 +212,41 @@ public sealed class SymbolIndex
             var semantic = doc.GetSemanticModelAsync(ct).GetAwaiter().GetResult();
             if (semantic is null) continue;
 
-            foreach (var sym in WalkDocumentSymbols(semantic))
+            foreach (var declared in WalkDocumentSymbols(semantic))
             {
+                // Each part of a partial member is its own symbol with its own location; the build
+                // indexes the definition part, so the walk must too or one method reads as two.
+                var sym = DefinitionPart(declared);
                 if (!predicate(sym)) continue;
                 var info = RoslynHelpers.ToSymbolInfo(sym);
                 var key = !string.IsNullOrEmpty(info.SymbolId) ? info.SymbolId : sym.ToDisplayString();
-                if (seen.Add(key))
-                    results.Add(new IndexedSymbol(key, new HashSet<DocumentId> { docId }, info));
+                AddOrMerge(Key(key, info, docId), new IndexedSymbol(key, new HashSet<DocumentId> { docId }, info));
             }
         }
 
         return results;
     }
+
+    /// <summary>
+    /// A partial member's symbol carries only its own part's location, but either part's file can
+    /// change its attributes; both must dirty the entry, or editing the implementation alone leaves a
+    /// stale match.
+    /// </summary>
+    private static IEnumerable<Location> AllPartLocations(ISymbol symbol) => symbol switch
+    {
+        IMethodSymbol { PartialImplementationPart: { } implementation } => symbol.Locations.Concat(implementation.Locations),
+        IPropertySymbol { PartialImplementationPart: { } implementation } => symbol.Locations.Concat(implementation.Locations),
+        IEventSymbol { PartialImplementationPart: { } implementation } => symbol.Locations.Concat(implementation.Locations),
+        _ => symbol.Locations
+    };
+
+    private static ISymbol DefinitionPart(ISymbol symbol) => symbol switch
+    {
+        IMethodSymbol { PartialDefinitionPart: { } definition } => definition,
+        IPropertySymbol { PartialDefinitionPart: { } definition } => definition,
+        IEventSymbol { PartialDefinitionPart: { } definition } => definition,
+        _ => symbol
+    };
 
     private static IEnumerable<string> CandidateKeys(ITypeSymbol? type)
     {

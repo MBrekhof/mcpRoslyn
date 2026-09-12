@@ -33,5 +33,9 @@ public static class FakeMapperUsage
         mapper.AddHostedService<FakeMapper>();
         new FakeServiceCollection().AddHostedService<FakeMapper>();
         app.Map<string>(new object());
+
+        // IDX-005 fixture: TestWeb's copy of the linked Shared.Linked is used, TestApp's is not —
+        // so the file is not dead code, whichever copy is checked first.
+        _ = new Shared.Linked();
     }
 }

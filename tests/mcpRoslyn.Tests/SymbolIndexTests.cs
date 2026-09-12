@@ -275,4 +275,146 @@ public class SymbolIndexTests
             File.WriteAllText(partial2.FilePath!, partial2Backup);
         }
     }
+
+    [Test]
+    public async Task AllSymbols_keeps_same_named_types_from_different_projects_apart()
+    {
+        // IDX-005: TestApp and TestWeb each declare Shared.Dup, so both carry the id "T:Shared.Dup".
+        // De-duplicating on the id alone kept one and silently dropped the other.
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+        var solution = await sut.GetFreshSolutionAsync();
+
+        sut.SymbolIndex.AllSymbols(solution)
+            .Where(e => e.SymbolId == "T:Shared.Dup")
+            .Select(e => e.Info.PrimaryLocation!.FilePath)
+            .Should().HaveCount(2).And.OnlyHaveUniqueItems();
+
+        // The harder case: one file linked into TestApp and TestWeb — same path, two assemblies.
+        sut.SymbolIndex.AllSymbols(solution)
+            .Where(e => e.SymbolId == "T:Shared.Linked")
+            .Should().HaveCount(2);
+    }
+
+    [Test]
+    public async Task Removing_an_attribute_from_a_partial_implementation_alone_drops_the_match()
+    {
+        // The build recorded only the definition's file as declaring the method, so a change to the
+        // implementation file never invalidated the cached [MyMarker] match.
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+
+        var docs = (await sut.GetFreshSolutionAsync()).Projects.SelectMany(p => p.Documents).ToList();
+        var part1 = docs.First(d => d.Name == "Partial1.cs").FilePath!;
+        var part2 = docs.First(d => d.Name == "Partial2.cs").FilePath!;
+        var backup1 = File.ReadAllText(part1);
+        var backup2 = File.ReadAllText(part2);
+        try
+        {
+            File.WriteAllText(part1, backup1.Replace("public int Foo() => 1;",
+                "public int Foo() => 1;\n    public partial int GetValue();"));
+            File.WriteAllText(part2, backup2.Replace("public int Bar() => 2;",
+                "public int Bar() => 2;\n    [MyMarker] public partial int GetValue() => 3;"));
+            File.SetLastWriteTimeUtc(part1, DateTime.UtcNow.AddSeconds(1));
+            File.SetLastWriteTimeUtc(part2, DateTime.UtcNow.AddSeconds(1));
+            await sut.ReloadAsync(); // the index is built with the attribute on the implementation
+            await sut.WarmupTask;
+            sut.SymbolIndex.QueryAttribute("TestLib.MyMarkerAttribute", await sut.GetFreshSolutionAsync())
+                .Should().Contain(s => s.Name == "GetValue");
+
+            File.WriteAllText(part2, backup2.Replace("public int Bar() => 2;",
+                "public int Bar() => 2;\n    public partial int GetValue() => 3;"));
+            File.SetLastWriteTimeUtc(part2, DateTime.UtcNow.AddSeconds(2));
+
+            sut.SymbolIndex.QueryAttribute("TestLib.MyMarkerAttribute", await sut.GetFreshSolutionAsync())
+                .Should().NotContain(s => s.Name == "GetValue");
+        }
+        finally
+        {
+            File.WriteAllText(part1, backup1);
+            File.WriteAllText(part2, backup2);
+        }
+    }
+
+    [Test]
+    public async Task Removing_a_partial_implementation_keeps_the_surviving_definition()
+    {
+        // Tracking both parts' files (so an implementation-only edit invalidates) dropped the method
+        // when the implementation was deleted: only the dirty file was re-walked, and the definition
+        // lives in the unchanged one.
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+
+        var docs = (await sut.GetFreshSolutionAsync()).Projects.SelectMany(p => p.Documents).ToList();
+        var part1 = docs.First(d => d.Name == "Partial1.cs").FilePath!;
+        var part2 = docs.First(d => d.Name == "Partial2.cs").FilePath!;
+        var backup1 = File.ReadAllText(part1);
+        var backup2 = File.ReadAllText(part2);
+        try
+        {
+            File.WriteAllText(part1, backup1.Replace("public int Foo() => 1;",
+                "public int Foo() => 1;\n    [MyMarker] partial void Hook(int value);"));
+            File.WriteAllText(part2, backup2.Replace("public int Bar() => 2;",
+                "public int Bar() => 2;\n    partial void Hook(int value) { }"));
+            File.SetLastWriteTimeUtc(part1, DateTime.UtcNow.AddSeconds(1));
+            File.SetLastWriteTimeUtc(part2, DateTime.UtcNow.AddSeconds(1));
+            await sut.ReloadAsync();
+            await sut.WarmupTask;
+            sut.SymbolIndex.QueryAttribute("TestLib.MyMarkerAttribute", await sut.GetFreshSolutionAsync())
+                .Should().Contain(s => s.Name == "Hook");
+
+            File.WriteAllText(part2, backup2); // implementation gone; the definition in Partial1.cs survives
+            File.SetLastWriteTimeUtc(part2, DateTime.UtcNow.AddSeconds(2));
+
+            sut.SymbolIndex.QueryAttribute("TestLib.MyMarkerAttribute", await sut.GetFreshSolutionAsync())
+                .Should().Contain(s => s.Name == "Hook");
+        }
+        finally
+        {
+            File.WriteAllText(part1, backup1);
+            File.WriteAllText(part2, backup2);
+        }
+    }
+
+    [Test]
+    public async Task Dirty_walk_reports_a_partial_method_split_across_files_once()
+    {
+        // Keyed on (id, file), the definition in Partial1.cs and the implementation in Partial2.cs
+        // read as two symbols once both files were re-walked; the build only ever saw one.
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+
+        var docs = (await sut.GetFreshSolutionAsync()).Projects.SelectMany(p => p.Documents).ToList();
+        var part1 = docs.First(d => d.Name == "Partial1.cs").FilePath!;
+        var part2 = docs.First(d => d.Name == "Partial2.cs").FilePath!;
+        var backup1 = File.ReadAllText(part1);
+        var backup2 = File.ReadAllText(part2);
+        try
+        {
+            File.WriteAllText(part1, backup1.Replace("public int Foo() => 1;",
+                "public int Foo() => 1;\n    public partial int GetValue();"));
+            File.WriteAllText(part2, backup2.Replace("public int Bar() => 2;",
+                "public int Bar() => 2;\n    public partial int GetValue() => 3;"));
+            File.SetLastWriteTimeUtc(part1, DateTime.UtcNow.AddSeconds(1));
+            File.SetLastWriteTimeUtc(part2, DateTime.UtcNow.AddSeconds(1));
+            var refreshed = await sut.GetFreshSolutionAsync();
+
+            sut.SymbolIndex.QueryReturnType("int", refreshed)
+                .Where(s => s.Name == "GetValue")
+                .Should().ContainSingle();
+        }
+        finally
+        {
+            File.WriteAllText(part1, backup1);
+            File.WriteAllText(part2, backup2);
+        }
+    }
 }

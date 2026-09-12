@@ -19,6 +19,29 @@ public sealed class FindDeadCodeCandidatesToolTests
     }
 
     [Test]
+    public async Task Same_named_unreferenced_types_in_two_projects_are_both_reported()
+    {
+        // IDX-005: each index entry resolves to its own declaration, not to whichever project first
+        // shares the id — so both Shared.Dup types (TestApp, TestWeb) are candidates.
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var r = await host.Tool.InvokeAsync(includePublicTypes: true, maxResults: 1000);
+
+        r.Error.Should().BeNull();
+        r.Result!.Candidates.Where(c => c.Symbol.EndsWith("Shared.Dup")).Should().HaveCount(2);
+        r.Result.Candidates.Should().NotContain(c => c.Symbol.EndsWith("Shared.Linked"),
+            "a linked declaration is dead only if no assembly compiling it uses it, and TestWeb's copy is used");
+        r.Result.Candidates.Where(c => c.Symbol.EndsWith("Shared.LinkedUnused")).Should().ContainSingle(
+            "an unused linked declaration is one candidate, not one per assembly and not none");
+        r.Result.Candidates.Should().NotContain(c => c.Symbol.EndsWith("Shared.LinkedExtensions"),
+            "TestWeb's copy declares an extension method, which makes the class framework-reached");
+
+        // internal in TestApp, public in TestWeb (#if TESTWEB): without includePublicTypes its public
+        // copy keeps it out, whichever project's copy resolves first.
+        var internalsOnly = await host.Tool.InvokeAsync(maxResults: 1000);
+        internalsOnly.Result!.Candidates.Should().NotContain(c => c.Symbol.EndsWith("Shared.LinkedConditional"));
+    }
+
+    [Test]
     public async Task Detects_unreferenced_internal_type_with_medium_confidence_when_InternalsVisibleTo_present()
     {
         await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();

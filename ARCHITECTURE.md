@@ -50,7 +50,7 @@ Queries hit the dictionary in O(matches). Always-fresh semantics are preserved v
 
 The build walks **`compilation.Assembly.GlobalNamespace`, not `compilation.GlobalNamespace`** — the latter merges every referenced assembly, so the walk covered the entire BCL and every package before discarding the results (a symbol with no source-declaring document is dropped). Using the wrong root cost ~20–27× for an identical index; see PERF-001. It also meant each symbol was indexed once per *referencing* project, since a project reference brings the referenced project's source symbols into the referencing compilation.
 
-`AllSymbols(solution, ct)` — the flat enumeration behind `find_dead_code_candidates` — goes through the same `MergeWithDirtyWalk` as the pattern queries, so it sees post-build edits and returns symbol-id-deduplicated results. It takes the current `Solution` for that reason; there is no parameterless overload.
+`AllSymbols(solution, ct)` — the flat enumeration behind `find_dead_code_candidates` — goes through the same `MergeWithDirtyWalk` as the pattern queries, so it sees post-build edits and returns results de-duplicated on (symbol id, declaration file, declaring assembly name) — see "Symbol identity" under Error handling (IDX-005). It takes the current `Solution` for that reason; there is no parameterless overload.
 
 ### InvocationIndex
 
@@ -116,7 +116,11 @@ Three layers:
 2. **Tool envelope** (`ToolBase.ExecuteAsync`) — catches `FileNotFoundException`, `InvalidOperationException`, generic `Exception`; returns `ToolError { code, message, hint? }`.
 3. **Empty results** — `find_references` on an unused symbol returns `[]`, not an error. Empty is not failure.
 
-Codes: `WORKSPACE_NOT_LOADED`, `FILE_NOT_IN_WORKSPACE`, `SYMBOL_NOT_FOUND`, `POSITION_INVALID`, `INVALID_PATTERN`, `RENAME_CONFLICT`, `INDEX_UNAVAILABLE`, `INTERNAL_ERROR`.
+Codes: `WORKSPACE_NOT_LOADED`, `FILE_NOT_IN_WORKSPACE`, `SYMBOL_NOT_FOUND`, `POSITION_INVALID`, `INVALID_PATTERN`, `RENAME_CONFLICT`, `INDEX_UNAVAILABLE`, `AMBIGUOUS_SYMBOL_ID`, `INTERNAL_ERROR`.
+
+A `DocumentationCommentId` carries no assembly identity, so two projects declaring the same fully-qualified name share one id (every top-level-statements project's `Program` does). **Symbol identity.** `SymbolIndex` keys entries on (id, declaration file, declaring assembly *name*), folds partial members to their definition part, and keeps every declaring document when one declaration is seen through several projects of the same assembly; resolving a `symbolId` that names distinct symbols fails with `AMBIGUOUS_SYMBOL_ID` — listing each declaration and its assembly — instead of answering about whichever project enumerates first (IDX-005). The assembly name is what separates a file linked into two projects (same path, two symbols) from one assembly built for several target frameworks or a referenced project's source seen through a referencing compilation (one symbol). `find_dead_code_candidates` works one level up, on the declaration you would delete: a linked or multi-targeted declaration's copies merge into one candidate, judged towards keeping the code (most exposed accessibility; a reference or denylisted attribute on any copy spares it).
+
+Known limits: unrelated projects that share an assembly name *and* link the same file still collapse; a partial type whose other parts differ between the projects linking one part is grouped per primary file; and position-based tools (`filePath/line/column`) on a linked file resolve in the first project that compiles it.
 
 ## Project layout
 

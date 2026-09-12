@@ -4,8 +4,16 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
+    <DefineConstants>$(DefineConstants);TESTWEB</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\TestLib\TestLib.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- IDX-005 fixture: a file linked into two unrelated projects. -->
+    <Compile Include="..\TestApp\Linked.cs" Link="Linked.cs" />
+    <Compile Include="..\TestApp\LinkedUnused.cs" Link="LinkedUnused.cs" />
+    <Compile Include="..\TestApp\LinkedConditional.cs" Link="LinkedConditional.cs" />
+    <Compile Include="..\TestApp\LinkedExtensions.cs" Link="LinkedExtensions.cs" />
   </ItemGroup>
 </Project>

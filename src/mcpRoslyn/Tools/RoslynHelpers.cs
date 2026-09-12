@@ -48,18 +48,68 @@ internal static class RoslynHelpers
             ?? semantic.GetDeclaredSymbol(node, ct);
     }
 
+    /// <summary>
+    /// The symbol a documentation-comment id names. The id carries no assembly identity, so two
+    /// projects declaring the same fully-qualified name share it; rather than silently answering about
+    /// whichever project enumerates first, that throws <see cref="AmbiguousSymbolIdException"/> (IDX-005).
+    /// One symbol seen through several compilations — a referenced project's source, or one assembly
+    /// built for several target frameworks — counts once; a file linked into two assemblies counts twice.
+    /// </summary>
     public static async Task<ISymbol?> ResolveSymbolByIdAsync(
         Solution solution, string symbolId, CancellationToken ct)
     {
+        var found = new List<ISymbol>();
+        // Same key shape as SymbolIndex: declaration file + assembly. No span — a multi-targeted
+        // project's #if variants of one type are one assembly's symbol, as the index treats them.
+        var seen = new HashSet<(string? File, string? Assembly)>();
         foreach (var project in solution.Projects)
         {
             var compilation = await project.GetCompilationAsync(ct);
             if (compilation is null) continue;
-            var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(symbolId, compilation);
-            if (symbols.Length > 0) return symbols[0];
+            foreach (var symbol in DocumentationCommentId.GetSymbolsForDeclarationId(symbolId, compilation))
+            {
+                var source = symbol.Locations.FirstOrDefault(l => l.IsInSource);
+                if (seen.Add((source?.SourceTree?.FilePath, symbol.ContainingAssembly?.Name)))
+                    found.Add(symbol);
+            }
         }
-        return null;
+
+        // Each declaration names its assembly: a linked file's copies share file and line.
+        if (found.Count > 1)
+            throw new AmbiguousSymbolIdException(symbolId, found
+                .Select(s => (Location: s.Locations.Select(ToLocation).FirstOrDefault(l => l is not null),
+                              Assembly: s.ContainingAssembly?.Name))
+                .Where(x => x.Location is not null)
+                .Select(x => $"{x.Location!.FilePath}:{x.Location.Line} in {x.Assembly}")
+                .ToList());
+        return found.FirstOrDefault();
     }
+
+    /// <summary>
+    /// Every symbol one declaration produces: resolved in its declaring documents' own projects and
+    /// matched on its declaration file, so a same-named type elsewhere can't stand in. Usually one; a
+    /// file linked into several projects yields one symbol per assembly that compiles it (IDX-005).
+    /// </summary>
+    public static async Task<IReadOnlyList<ISymbol>> ResolveDeclaredSymbolsAsync(
+        Solution solution, IEnumerable<DocumentId> declaringDocs, string symbolId, string filePath, CancellationToken ct)
+    {
+        var matches = new List<ISymbol>();
+        foreach (var projectId in declaringDocs.Select(d => d.ProjectId).Distinct())
+        {
+            if (solution.GetProject(projectId) is not { } project) continue;
+            var compilation = await project.GetCompilationAsync(ct);
+            if (compilation is null) continue;
+            var match = DocumentationCommentId.GetSymbolsForDeclarationId(symbolId, compilation)
+                .FirstOrDefault(s => s.Locations.Any(l => l.IsInSource
+                    && string.Equals(l.SourceTree?.FilePath, filePath, StringComparison.OrdinalIgnoreCase)));
+            if (match is not null) matches.Add(match);
+        }
+        return matches;
+    }
+
+    /// <summary>A symbol id naming distinct symbols in different projects; ToolBase maps it to AMBIGUOUS_SYMBOL_ID (IDX-005).</summary>
+    internal sealed class AmbiguousSymbolIdException(string symbolId, IReadOnlyList<string> locations)
+        : Exception($"Symbol ID '{symbolId}' names {locations.Count} different symbols: {string.Join(", ", locations)}.");
 
     /// <summary>
     /// The project's own analyzers (NetAnalyzers, StyleCop, Roslynator, …) exactly as MSBuild resolved them,

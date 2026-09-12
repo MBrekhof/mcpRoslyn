@@ -103,7 +103,9 @@ internal sealed class SemanticSearchTool(IWorkspaceService ws, ILogger<SemanticS
     private static void AddIfNew(List<Contracts.SymbolInfo> matches, HashSet<string> dedup, ISymbol sym)
     {
         var info = RoslynHelpers.ToSymbolInfo(sym);
-        if (dedup.Add(info.SymbolId.Length > 0 ? info.SymbolId : sym.ToDisplayString()))
+        // Id plus file: same-named types in different projects share an id (IDX-005).
+        var id = info.SymbolId.Length > 0 ? info.SymbolId : sym.ToDisplayString();
+        if (dedup.Add($"{id}|{info.PrimaryLocation?.FilePath}"))
             matches.Add(info);
     }
 
