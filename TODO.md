@@ -227,7 +227,11 @@ not only a human-report tool. Comparing the two surfaces produced three items wo
 advantage over us stays put:** it analyses build output, so it needs a green build and an analysis run, while
 mcpRoslyn answers on a branch with compile errors on the floor.
 
-- [ ] **DIAG-001: Surface Roslyn analyzer diagnostics, not just compiler diagnostics.** (ID: 1311) — **Todo, est. 3 h**
+- [x] ~~**DIAG-001: Surface Roslyn analyzer diagnostics, not just compiler diagnostics.**~~ (ID: 1311)
+  Done 2026-09-13 (`5a64d28`). `get_document_diagnostics` runs the project's analyzers **by default**, scoped to one tree (syntax + semantic analyzer diagnostics); `get_compilation_errors` takes **`includeAnalyzers: true`**. The defaults come from BPG numbers, as this card asked: per file ~180-225 ms median with analyzers vs 5-9 ms compiler-only; solution-wide ~2.4 s vs ~45 ms (548 → 1216 diagnostics). So roslynk's default-on-with-cache wasn't needed per file, and solution-wide isn't affordable by default without a cache we don't have. Configured `.editorconfig` severities and suppressions apply — the fixture raises CA1822 (off by default) and pragma-suppresses a second copy.
+
+  Three Codex review rounds added: AD0001 analyzer-failure reporting on the per-file path; a suppressor-only whole-compilation pass so `DiagnosticSuppressor`s (EF Core's CS8618-on-DbSet) hide compiler diagnostics per file, run only when the file has a diagnostic one claims; additional-location filtering in that pass; and a guard against a throwing `SupportedSuppressions` getter. Compilation-end rules don't run per file (documented in the tool description). Nothing cached, nothing in warm-up. `BenchmarkTests.Diagnostics_analyzer_cost` (manual) holds the measurement; design in ARCHITECTURE.md "Analyzer diagnostics (DIAG-001)".
+
   `get_compilation_errors` / `get_document_diagnostics` call `compilation.GetDiagnostics()` and
   `semantic.GetDiagnostics()` only — there is no `CompilationWithAnalyzers` in src. So `.editorconfig` severities,
   StyleCop, Roslynator, NetAnalyzers and any DevExpress/XAF analyzers are invisible. For an agent handing code back
@@ -311,6 +315,22 @@ rebuilding NDepend badly.
   Acceptance: in the Electron.NET repo, a session can get `workspace_symbol` hits in ElectronNET.IntegrationTests without restarting the server.
 
   Non-goal noted for the record: Razor/Blazor semantic support was discussed the same session and deliberately NOT carded — no measured pain yet, and it would be a large build (Razor generated-document mapping). Card it only when a session is actually bitten.
+
+## Spotted in real-session use (XafLayoutBuilder, 2026-09-12)
+
+- [ ] **WS-007: Workspace goes stale silently — files and project references added after load give incomplete answers with no warning.** (ID: 1654)
+  Reported 2026-09-12 from a XafLayoutBuilder session. `find_references` on `LayoutRegistry.Register<T>` (`XafLayoutBuilder.Module\LayoutRegistry.cs:22:24`) returned 2 references and missed `XafLayoutBuilder.Tests\SpecValidationTests.cs:86`, which a text search finds and `dotnet test` runs. The agent had no way to tell the answer was incomplete.
+
+  Cause (**confirmed**: `reload_workspace` in that session, then the same call, found the missing reference): `XafLayoutBuilder.Tests.csproj` gained its `ProjectReference` to Module at 20:07:34 and `SpecValidationTests.cs` was written at 20:10:53, both after the server loaded. `GetFreshSolutionAsync` (`WorkspaceService.cs:62`) only re-reads documents that were already in the solution; ARCHITECTURE.md lists new .cs files, .csproj edits and new projects as needing `reload_workspace`. Without the reference the Tests compilation can't bind the call to Module's `Register<T>`, so there is nothing to find. Suspects 2 and 3 in the report (Tests loaded broken; generic method inside a lambda) are ruled out — the reload fixed it.
+
+  The documented limit is fine. The defect is that it's **silent**: the result looks complete.
+
+  Fix, cheapest first:
+  - a) Per call, `GetFreshSolutionAsync` already stats every document; also stat the solution file and each project file (plus `Directory.Build.props`/`.targets` it can see) and compare to load time. Catches the `ProjectReference` case above at near-zero cost.
+  - b) New or deleted .cs files in SDK-style projects don't touch the .csproj, so (a) misses them. A `FileSystemWatcher` on the project directories (`*.cs` created/deleted/renamed, excluding bin/obj) sets a stale flag.
+  - c) Report, don't auto-reload, for now: a stale workspace adds a warning to every tool result naming what changed and saying to call `reload_workspace` (needs an optional warnings field on `ToolResult<T>`). Auto-reload costs seconds of warm-up and is unsafe until WS-006 makes reloads atomic and IDX-002 stops indexed tools answering empty during warm-up — revisit after those.
+
+  Test: load the fixture, add a `ProjectReference` or a new .cs file on disk, assert the next tool result carries the stale warning; after `reload_workspace` it doesn't.
 
 ## From the Codex review (2026-09-12)
 
