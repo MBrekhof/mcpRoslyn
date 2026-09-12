@@ -1,0 +1,4 @@
+# DIAG-001: CA1822 is off by default. Raising it here is what proves analyzer diagnostics
+# arrive at the project's CONFIGURED severity, not the rule's default.
+[*.cs]
+dotnet_diagnostic.CA1822.severity = warning

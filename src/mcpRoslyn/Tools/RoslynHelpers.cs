@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Text;
 using mcpRoslyn.Contracts;
@@ -48,6 +50,23 @@ internal static class RoslynHelpers
             if (symbols.Length > 0) return symbols[0];
         }
         return null;
+    }
+
+    /// <summary>
+    /// The project's own analyzers (NetAnalyzers, StyleCop, Roslynator, …) exactly as MSBuild resolved them,
+    /// or <c>null</c> when it has none. Severities come from <c>project.AnalyzerOptions</c> and the
+    /// compilation's .editorconfig/globalconfig tree options, and suppressed diagnostics are not reported,
+    /// so a rule the project switched off stays off (DIAG-001).
+    /// </summary>
+    public static CompilationWithAnalyzers? WithProjectAnalyzers(Project project, Compilation compilation,
+        Action<Exception, DiagnosticAnalyzer, Diagnostic>? onAnalyzerException = null)
+    {
+        var analyzers = project.AnalyzerReferences
+            .SelectMany(r => r.GetAnalyzers(project.Language))
+            .ToImmutableArray();
+        return analyzers.IsEmpty ? null : compilation.WithAnalyzers(analyzers,
+            new CompilationWithAnalyzersOptions(project.AnalyzerOptions, onAnalyzerException,
+                concurrentAnalysis: true, logAnalyzerExecutionTime: false, reportSuppressedDiagnostics: false));
     }
 
     public static SymbolLocation? ToLocation(Location loc)

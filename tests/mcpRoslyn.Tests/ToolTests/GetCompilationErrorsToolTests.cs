@@ -72,4 +72,22 @@ public class GetCompilationErrorsToolTests
         r.Result!.Diagnostics.Should().NotContain(
             d => d.Location != null && d.Location.FilePath.EndsWith(".g.cs"));
     }
+
+    [Test]
+    public async Task Analyzers_are_opt_in_solution_wide()
+    {
+        await using var host = await TestHost.CreateAsync<GetCompilationErrorsTool>();
+
+        var compilerOnly = await host.Tool.InvokeAsync(severity: null, projectName: null, ct: CancellationToken.None);
+        compilerOnly.Result!.Diagnostics.Should().NotContain(d => d.Code == "CA1822");
+
+        var withAnalyzers = await host.Tool.InvokeAsync(
+            severity: null, projectName: null, includeAnalyzers: true, ct: CancellationToken.None);
+        withAnalyzers.Error.Should().BeNull();
+        var ca1822 = withAnalyzers.Result!.Diagnostics
+            .Where(d => d.Code == "CA1822" && d.Location.FilePath.EndsWith("AnalyzerTarget.cs"))
+            .ToList();
+        ca1822.Should().ContainSingle("Twice is reported, pragma-suppressed Thrice is not");
+        ca1822[0].Severity.Should().Be("Warning");
+    }
 }

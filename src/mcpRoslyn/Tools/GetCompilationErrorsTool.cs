@@ -13,13 +13,14 @@ internal sealed class GetCompilationErrorsTool(IWorkspaceService ws, ILogger<Get
     : ToolBase(ws, log)
 {
     [McpServerTool(Name = "get_compilation_errors")]
-    [Description("Solution-wide diagnostic list — equivalent to 'would dotnet build succeed?' without invoking MSBuild. Defaults: minimumSeverity=\"Warning\" (Info/Hidden hidden), includeGenerated=true; pass minimumSeverity=\"All\" to see everything. excludeDiagnosticCodes and excludeDiagnosticSources accept string arrays.")]
+    [Description("Solution-wide diagnostic list — equivalent to 'would dotnet build succeed?' without invoking MSBuild. Defaults: minimumSeverity=\"Warning\" (Info/Hidden hidden), includeGenerated=true; pass minimumSeverity=\"All\" to see everything. excludeDiagnosticCodes and excludeDiagnosticSources accept string arrays. includeAnalyzers=true also runs the project's own analyzers (NetAnalyzers, StyleCop, …) at their configured .editorconfig severities — 'does it pass this project's bar', not just 'does it compile'; off by default because it re-runs every analyzer on the whole solution (seconds). For one file, get_document_diagnostics runs analyzers by default.")]
     public Task<Contracts.ToolResult<GetCompilationErrorsResult>> InvokeAsync(
         string? severity, string? projectName,
         bool includeGenerated = true,
         string? minimumSeverity = "Warning",
         string[]? excludeDiagnosticCodes = null,
         string[]? excludeDiagnosticSources = null,
+        bool includeAnalyzers = false,
         string format = "structured",
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
@@ -37,7 +38,12 @@ internal sealed class GetCompilationErrorsTool(IWorkspaceService ws, ILogger<Get
                 var compilation = await project.GetCompilationAsync(ct2);
                 if (compilation is null) continue;
 
-                foreach (var d in compilation.GetDiagnostics(ct2))
+                var withAnalyzers = includeAnalyzers ? RoslynHelpers.WithProjectAnalyzers(project, compilation) : null;
+                var diagnostics = withAnalyzers is null
+                    ? compilation.GetDiagnostics(ct2)
+                    : await withAnalyzers.GetAllDiagnosticsAsync(ct2); // compiler + analyzer diagnostics
+
+                foreach (var d in diagnostics)
                 {
                     if (exactSeverity is not null && d.Severity != exactSeverity.Value) continue;
                     results.Add(new Contracts.DiagnosticInfo(

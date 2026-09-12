@@ -86,6 +86,22 @@ Every tool accepts `format = "structured" | "summary"` (default `structured`). `
 
 `get_compilation_errors` and `get_document_diagnostics` accept `includeGenerated`, `minimumSeverity` (default `"Warning"`), `excludeDiagnosticCodes`, `excludeDiagnosticSources`. Pure post-filter at collection time, never affects how diagnostics are read from Roslyn.
 
+### Analyzer diagnostics (DIAG-001)
+
+Both diagnostics tools can also run the project's own analyzers — `Project.AnalyzerReferences` as MSBuild resolved them (NetAnalyzers, StyleCop, Roslynator, …) — through `CompilationWithAnalyzers` (`RoslynHelpers.WithProjectAnalyzers`). Severities are the ones the project's `.editorconfig`/globalconfig set, and pragma- or `SuppressMessage`-suppressed diagnostics are not reported, so the answer is "does it pass this project's bar", not the rules' defaults.
+
+The default differs by scope, set from measurements on BPG (8 projects, 2026-09-12, `BenchmarkTests.Diagnostics_analyzer_cost`):
+
+| Tool | Analyzers | Compiler-only | With analyzers |
+|---|---|---|---|
+| `get_document_diagnostics` | **on** (`includeAnalyzers: false` to skip) | median 9 ms | median 225 ms, max 780 ms; first call ~0.9 s (analyzer assembly load) |
+| `get_compilation_errors` | **opt-in** (`includeAnalyzers: true`) | ~45 ms, 548 diagnostics | ~2.4 s (~52x), 1216 diagnostics |
+
+Per file, analysis is scoped to one syntax tree (syntax + semantic analyzer diagnostics), so compilation-end rules — whole-project checks — are not run there; the solution-wide call runs them. Nothing is cached: each call builds a fresh `CompilationWithAnalyzers`, and nothing runs during warm-up.
+When analyzers are enabled and a loaded `DiagnosticSuppressor` supports suppressing one of the file's compiler diagnostic IDs, a whole-compilation pass containing only the project's suppressors runs with the same analyzer options and suppressed diagnostics excluded, replacing the file's compiler diagnostics with that pass's results for its syntax tree.
+
+Analyzer execution failures are returned as Roslyn's `AD0001` diagnostics alongside the other results. Per-file calls collect them through the analyzer exception callback because the tree-scoped APIs omit these non-local diagnostics; their configured severity and suppression still apply. Analyzer assembly load failures are separate (DIAG-002).
+
 ## Error handling
 
 Three layers:
