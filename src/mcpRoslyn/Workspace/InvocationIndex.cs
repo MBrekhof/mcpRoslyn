@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 using mcpRoslyn.Contracts;
 using mcpRoslyn.Tools;
 
@@ -396,18 +397,13 @@ public sealed class InvocationIndex
         // TOOL-009: only the IServiceCollection extension registers a hosted service.
         if (!IsServiceCollectionCall(inv, sem)) return null;
 
-        var genericName = inv.Expression switch
-        {
-            MemberAccessExpressionSyntax m when m.Name is GenericNameSyntax g => g,
-            GenericNameSyntax g => g,
-            _ => null
-        };
-        if (genericName is null || genericName.TypeArgumentList.Arguments.Count != 1) return null;
-
-        var t = sem.GetSymbolInfo(genericName.TypeArgumentList.Arguments[0]).Symbol as INamedTypeSymbol;
+        // From the bound method, not the syntax, so an inferred AddHostedService(sp => new Worker()) registers Worker.
+        var t = sem.GetSymbolInfo(inv).Symbol is IMethodSymbol { IsGenericMethod: true, TypeArguments.Length: 1 } method
+            ? TypeName(method.TypeArguments[0])
+            : null;
         var loc = ToLocation(inv);
         if (loc is null || t is null) return null;
-        return new HostedServiceEntry("registered", t.ToDisplayString(), null, null, docId, loc);
+        return new HostedServiceEntry("registered", t, null, null, docId, loc);
     }
 
     private static DiEntry? TryBuildDi(InvocationExpressionSyntax inv, SemanticModel sem, DocumentId docId, string methodName)
@@ -417,22 +413,80 @@ public sealed class InvocationIndex
         var lifetime = methodName.Substring(3); // "Singleton" / "Transient" / "Scoped"
         string? serviceType = null, implType = null;
 
-        var genericName = inv.Expression switch
+        // Types come from the bound method, not the syntax: AddSingleton(options) and AddTransient(sp => new Foo())
+        // infer their type arguments, and the non-generic overloads name types as typeof operands. Reading explicit
+        // generic syntax only left those entries with no type, so a registered type read as unregistered (TOOL-014).
+        if (sem.GetSymbolInfo(inv).Symbol is IMethodSymbol method)
         {
-            MemberAccessExpressionSyntax m when m.Name is GenericNameSyntax g => g,
-            GenericNameSyntax g => g,
-            _ => null
-        };
-        if (genericName is not null)
-        {
-            var args = genericName.TypeArgumentList.Arguments;
-            if (args.Count >= 1) serviceType = sem.GetSymbolInfo(args[0]).Symbol?.ToDisplayString();
-            if (args.Count >= 2) implType    = sem.GetSymbolInfo(args[1]).Symbol?.ToDisplayString();
+            if (method.IsGenericMethod)
+            {
+                var args = method.TypeArguments;
+                if (args.Length >= 1) serviceType = TypeName(args[0]);
+                if (args.Length >= 2) implType    = TypeName(args[1]);
+                // AddSingleton<IFoo>(sp => new Foo()) and AddSingleton<IFoo>(new Foo()) name the implementation only in
+                // their argument: the one type the factory returns, or the instance's static type.
+                if (args.Length == 1 && sem.GetOperation(inv) is IInvocationOperation withArguments)
+                    implType = ImplementationFromArguments(withArguments);
+            }
+            else if (sem.GetOperation(inv) is IInvocationOperation call)
+            {
+                // By the parameter each typeof binds to, so named arguments in any order map correctly.
+                foreach (var arg in call.Arguments)
+                {
+                    if (arg.Value is not ITypeOfOperation typeOf) continue;
+                    if (arg.Parameter?.Name == "serviceType") serviceType = TypeName(typeOf.TypeOperand);
+                    else if (arg.Parameter?.Name == "implementationType") implType = TypeName(typeOf.TypeOperand);
+                }
+                // AddSingleton(typeof(IFoo), new Foo()) and AddScoped(typeof(IFoo), sp => new Foo()).
+                implType ??= ImplementationFromArguments(call);
+            }
         }
 
         var loc = ToLocation(inv);
         if (loc is null) return null;
         return new DiEntry(serviceType, implType, lifetime, inv.ToString(), docId, loc);
+    }
+
+    private static string? TypeName(ITypeSymbol? type)
+        => type is null or { TypeKind: TypeKind.Error } ? null : type.ToDisplayString();
+
+    /// <summary>
+    /// The implementation a single-type-argument registration names only through its argument: the static type of an
+    /// instance, or the one type a factory lambda returns. Null when there is no such argument, or when the factory's
+    /// returns disagree — an unknown implementation, not a guessed one.
+    /// </summary>
+    private static string? ImplementationFromArguments(IInvocationOperation call)
+    {
+        foreach (var arg in call.Arguments)
+        {
+            var value = WithoutConversions(arg.Value);
+            if (arg.Parameter?.Name == "implementationInstance") return TypeName(value.Type);
+            if (value is not IDelegateCreationOperation { Target: IAnonymousFunctionOperation factory }) continue;
+
+            var returned = factory.Body.Descendants().OfType<IReturnOperation>()
+                .Where(r => r.ReturnedValue is not null && ReturnsFrom(r, factory))
+                .Select(r => WithoutConversions(r.ReturnedValue!).Type)
+                .Distinct(SymbolEqualityComparer.Default)
+                .ToArray();
+            return returned.Length == 1 ? TypeName(returned[0] as ITypeSymbol) : null;
+        }
+        return null;
+
+        // Only the compiler's implicit conversions (Foo to IFoo or object) are looked through. An explicit cast decides
+        // the type, and a user-defined conversion can produce a different object from its operand.
+        static IOperation WithoutConversions(IOperation op)
+            => op is IConversionOperation { IsImplicit: true, Conversion.IsUserDefined: false } c ? WithoutConversions(c.Operand) : op;
+
+        // A return inside a nested lambda or local function belongs to that function, not to the factory.
+        static bool ReturnsFrom(IOperation op, IAnonymousFunctionOperation owner)
+        {
+            for (var parent = op.Parent; parent is not null; parent = parent.Parent)
+            {
+                if (ReferenceEquals(parent, owner)) return true;
+                if (parent is IAnonymousFunctionOperation or ILocalFunctionOperation) return false;
+            }
+            return false;
+        }
     }
 
     // Cheap syntactic gate for the Unclassified-DI fallback (issue #1). A superset of

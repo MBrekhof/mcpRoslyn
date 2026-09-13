@@ -74,7 +74,7 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
                 .ToList();
 
             // Built once, and only when it will be consulted — it walks the whole DI index.
-            var registered = includePublicTypes ? BuildRegistrationLookup(ready.InvocationIndex) : null;
+            var registered = includePublicTypes ? RegistrationLookup.Build(ready.InvocationIndex) : null;
 
             int publicSkip = 0, testSkip = 0, denySkip = 0, diSkip = 0, frameworkSkip = 0;
             var truncated = false;
@@ -206,55 +206,6 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
     private static bool IsInsideOwnDeclaration(ISymbol symbol, Location location)
         => symbol.DeclaringSyntaxReferences.Any(d =>
             d.SyntaxTree == location.SourceTree && d.Span.Contains(location.SourceSpan));
-
-    private static RegistrationLookup BuildRegistrationLookup(InvocationIndex index)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        var di = index.QueryDi();
-        foreach (var e in di.Registrations)
-        {
-            if (e.ServiceType is not null) names.Add(e.ServiceType);
-            if (e.ImplType is not null) names.Add(e.ImplType);
-        }
-        // AddHostedService<T> lands in the hosted-service index, not the DI one.
-        foreach (var h in index.QueryHostedServices())
-        {
-            if (h.ServiceType is not null) names.Add(h.ServiceType);
-            if (h.Type is not null) names.Add(h.Type);
-        }
-        return new RegistrationLookup(names, di.Unclassified.Select(u => u.RawCall).ToArray());
-    }
-
-    private sealed record RegistrationLookup(HashSet<string> Names, IReadOnlyList<string> RawCalls)
-    {
-        public bool Covers(INamedTypeSymbol type)
-        {
-            if (Names.Contains(type.ToDisplayString())) return true;
-            // Unclassified DI calls (AddMyThing<Foo>(), AddHangfire(...)) survive only as source
-            // text, so the simple name is all there is to match on.
-            return RawCalls.Any(c => MentionsIdentifier(c, type.Name));
-        }
-
-        /// <summary>
-        /// Substring matching is wrong here: "CodeGenerationService" occurs inside every mention of
-        /// "ICodeGenerationService", so a registered interface would silently exonerate the dead
-        /// class named after it — exactly the case TOOL-006 exists to catch. Match whole identifiers.
-        /// </summary>
-        private static bool MentionsIdentifier(string text, string name)
-        {
-            for (var i = text.IndexOf(name, StringComparison.Ordinal); i >= 0;
-                 i = text.IndexOf(name, i + name.Length, StringComparison.Ordinal))
-            {
-                var startsWord = i == 0 || !IsIdentifierChar(text[i - 1]);
-                var end = i + name.Length;
-                var endsWord = end >= text.Length || !IsIdentifierChar(text[end]);
-                if (startsWord && endsWord) return true;
-            }
-            return false;
-        }
-
-        private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
-    }
 
     /// <summary>
     /// True when a copy is the method its compilation reports as the entry point: top-level statements'

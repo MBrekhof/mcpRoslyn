@@ -171,6 +171,36 @@ internal static class RoslynHelpers
         return await compilation.WithAnalyzers(suppressors, withAnalyzers.AnalysisOptions).GetAllDiagnosticsAsync(ct);
     }
 
+    /// <summary>
+    /// A type's display name reduced to its generic definition: <c>Ns.Worker&lt;int&gt;</c> and <c>Ns.Worker&lt;T&gt;</c>
+    /// both become <c>Ns.Worker`1</c>. A registration names the constructed type while SymbolIndex names the
+    /// declaration, so matching one against the other needs this shared identity.
+    /// </summary>
+    internal static string GenericDefinitionName(string displayName)
+    {
+        if (displayName.IndexOf('<') < 0) return displayName;
+        var name = new System.Text.StringBuilder(displayName.Length);
+        int depth = 0, arity = 0;
+        foreach (var c in displayName)
+        {
+            if (depth == 0)
+            {
+                if (c == '<') { depth = 1; arity = 1; }
+                else name.Append(c);
+                continue;
+            }
+            switch (c)
+            {
+                case '<' or '(' or '[': depth++; break;
+                case '>' or ')' or ']':
+                    if (--depth == 0) name.Append('`').Append(arity);
+                    break;
+                case ',' when depth == 1: arity++; break; // commas inside a nested generic or tuple don't count
+            }
+        }
+        return name.ToString();
+    }
+
     public static SymbolLocation? ToLocation(Location loc)
     {
         if (!loc.IsInSource || loc.SourceTree?.FilePath is null) return null;

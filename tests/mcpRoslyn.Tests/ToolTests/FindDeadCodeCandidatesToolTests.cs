@@ -119,6 +119,20 @@ public sealed class FindDeadCodeCandidatesToolTests
     }
 
     [Test]
+    public async Task Unregistered_BackgroundService_subclass_is_a_candidate_and_a_registered_one_is_not()
+    {
+        // The hosted-service index lists every BackgroundService subclass, registered or not, so only its
+        // "registered" entries may count as a registration. PollingWorker is registered nowhere; EmailWorker
+        // is AddHostedService<EmailWorker>().
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var r = await host.Tool.InvokeAsync(includePublicTypes: true, maxResults: 1000);
+
+        r.Error.Should().BeNull();
+        r.Result!.Candidates.Should().Contain(c => c.Symbol.EndsWith("PollingWorker"));
+        r.Result.Candidates.Should().NotContain(c => c.Symbol.EndsWith("EmailWorker"));
+    }
+
+    [Test]
     public async Task Program_entry_point_is_never_a_candidate()
     {
         // TOOL-012: TestApp and TestWeb use top-level statements. The compiler-synthesized entry point

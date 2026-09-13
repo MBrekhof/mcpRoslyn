@@ -15,17 +15,21 @@ public sealed record RegistrationEntry(
     Contracts.SymbolLocation Location,
     IReadOnlyList<DiConsumer> LikelyConsumers);
 
+/// <param name="UnregisteredTypes">Only when a query matched no registration at all: the solution's types whose
+/// name contains the query, so "exists but isn't registered" reads differently from "no such type" (TOOL-014).
+/// Null otherwise.</param>
 public sealed record FindRegistrationsResult(
     IReadOnlyList<RegistrationEntry> Registrations,
     IReadOnlyList<RegistrationEntry> Unclassified,
-    IReadOnlyList<string> Truncated);
+    IReadOnlyList<string> Truncated,
+    IReadOnlyList<string>? UnregisteredTypes = null);
 
 [McpServerToolType]
 internal sealed class FindRegistrationsTool(IWorkspaceService ws, ILogger<FindRegistrationsTool> log)
     : ToolBase(ws, log)
 {
     [McpServerTool(Name = "find_registrations")]
-    [Description("Returns IServiceCollection DI registrations (AddSingleton/AddTransient/AddScoped) with service/impl/lifetime and likely constructor consumers.")]
+    [Description("Returns IServiceCollection DI registrations (AddSingleton/AddTransient/AddScoped) with service/impl/lifetime and likely constructor consumers. When a query matches no registration, unregisteredTypes lists the solution's types whose name (full name, for a dotted query) contains it, minus any type with registration evidence (DI, AddHostedService, unclassified calls naming it), so an empty result distinguishes 'exists but not registered' from 'no such type'.")]
     public Task<Contracts.ToolResult<FindRegistrationsResult>> InvokeAsync(
         string? query = null,
         bool includeConsumers = true,
@@ -68,7 +72,31 @@ internal sealed class FindRegistrationsTool(IWorkspaceService ws, ILogger<FindRe
                 Location:    e.Location,
                 LikelyConsumers: Array.Empty<DiConsumer>())).ToArray();
 
-            var result = new FindRegistrationsResult(regs, unc, truncated);
+            // Nothing matched: say whether the query names types that exist but aren't registered, which an empty
+            // result can't tell apart from a typo (TOOL-014). Only on this path, so a match costs nothing extra.
+            IReadOnlyList<string>? unregisteredTypes = null;
+            if (!string.IsNullOrWhiteSpace(query) && classified.Count == 0 && unclassified.Count == 0)
+            {
+                // A textual query miss doesn't prove a type unregistered: AddHostedService, an unclassified
+                // TryAddSingleton<Foo>(), or Repo<int> registered against a declared Repo<T> all name it differently.
+                // Reconcile against every registration the index holds, the test find_dead_code_candidates uses.
+                var registered = RegistrationLookup.Build(indexed.InvocationIndex);
+                // A dotted query names a type the way ServiceType/ImplType do, so it matches the full name; a bare
+                // one matches the simple name, so "Foo" doesn't pull in every type of a Foo.* namespace.
+                var qualified = query.Contains('.');
+                var types = indexed.SymbolIndex.AllSymbols(solution, ct2).Symbols
+                    .Where(s => s.Info.Kind == "NamedType"
+                                && (qualified ? s.Info.Signature : s.Info.Name).Contains(query, StringComparison.OrdinalIgnoreCase))
+                    .Where(s => !registered.Covers(s.Info.Signature, s.Info.Name))
+                    .Select(s => s.Info.Signature)
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal)
+                    .ToArray();
+                if (types.Length > maxResults) truncated.Add("unregisteredTypes");
+                unregisteredTypes = types.Take(maxResults).ToArray();
+            }
+
+            var result = new FindRegistrationsResult(regs, unc, truncated, unregisteredTypes);
             if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
             {
                 var lifetimes = result.Registrations
@@ -77,8 +105,9 @@ internal sealed class FindRegistrationsTool(IWorkspaceService ws, ILogger<FindRe
                     .Select(g => $"{g.Count()} {g.Key}")
                     .ToList();
                 var lifetimeBreakdown = lifetimes.Count > 0 ? string.Join(", ", lifetimes) : "none";
+                var unregisteredNote = result.UnregisteredTypes is { } u ? $"; {u.Count} unregistered types match" : "";
                 return Contracts.ToolResult<FindRegistrationsResult>.OkSummary(
-                    $"{result.Registrations.Count} DI registrations ({lifetimeBreakdown})");
+                    $"{result.Registrations.Count} DI registrations ({lifetimeBreakdown}){unregisteredNote}");
             }
             return Contracts.ToolResult<FindRegistrationsResult>.Ok(result);
         }, ct);
