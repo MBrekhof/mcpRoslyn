@@ -47,7 +47,7 @@ internal sealed class FindImplementationsTool(IWorkspaceService ws, ILogger<Find
                 return Contracts.ToolResult<FindImplementationsResult>.Fail(
                     "SYMBOL_NOT_FOUND", "Could not resolve symbol.");
 
-            var impls = await SymbolFinder.FindImplementationsAsync(symbol, solution, projects: null, ct2);
+            var impls = await RoslynHelpers.FindImplementationsOrOverridesAsync(symbol, solution, ct2);
 
             // Dedup by source span — an implementation site is conceptually unique per
             // source position. Mirrors the FindReferencesTool pattern; same Roslyn quirks

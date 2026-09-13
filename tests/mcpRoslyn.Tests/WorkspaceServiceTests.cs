@@ -22,7 +22,7 @@ public class WorkspaceServiceTests
     public async Task LoadAsync_loads_fixture_solution_and_finds_both_projects()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
 
         await sut.LoadAsync();
 
@@ -33,7 +33,7 @@ public class WorkspaceServiceTests
     public async Task GetFreshSolutionAsync_picks_up_file_changes_via_mtime()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
         await sut.LoadAsync();
 
         var solution = await sut.GetFreshSolutionAsync();
@@ -66,7 +66,7 @@ public class WorkspaceServiceTests
     public async Task LoadAsync_warmup_populates_project_compilations()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
 
         await sut.LoadAsync();
         await sut.WarmupTask;
@@ -84,7 +84,7 @@ public class WorkspaceServiceTests
     public async Task LoadAsync_returns_before_warmup_completes()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
 
         await sut.LoadAsync();
 
@@ -101,7 +101,7 @@ public class WorkspaceServiceTests
     public async Task LoadAsync_clean_fixture_produces_empty_diagnostics()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
 
         await sut.LoadAsync();
 
@@ -125,7 +125,7 @@ public class WorkspaceServiceTests
             File.WriteAllText(slnPath, slnContent);
 
             var options = new McpRoslynOptions { SolutionPath = slnPath };
-            var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+            await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
 
             await sut.LoadAsync();
 
@@ -205,7 +205,7 @@ public class WorkspaceServiceTests
                 "Project(\"{54A90642-561A-4BB1-A94E-469ADEE60C69}\") = \"Frontend\", \"Frontend.esproj\", \"{22222222-2222-2222-2222-222222222222}\"\n" +
                 "EndProject\n");
 
-            var sut = new WorkspaceService(
+            await using var sut = new WorkspaceService(
                 new McpRoslynOptions { SolutionPath = slnPath }, NullLogger<WorkspaceService>.Instance);
             await sut.LoadAsync();
 
@@ -409,7 +409,7 @@ public class WorkspaceServiceTests
             File.WriteAllText(slnPath, slnContent);
 
             var options = new McpRoslynOptions { SolutionPath = slnPath };
-            var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+            await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
 
             await sut.LoadAsync();
             sut.Diagnostics.Should().NotBeEmpty();

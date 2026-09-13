@@ -55,5 +55,43 @@ public class FindImplementationsToolTests
         secondKeys.Should().Equal(firstKeys, "two back-to-back calls with no workspace changes must yield the same implementation set");
     }
 
+    [Test]
+    public async Task FindImplementations_abstract_member_returns_its_overrides()
+    {
+        // TOOL-011 review: the tool promises abstract members, but Roslyn's FindImplementationsAsync returns
+        // nothing for a class member — its implementations are its overrides.
+        await using var host = await TestHost.CreateAsync<FindImplementationsTool>();
+        var result = await host.Tool.InvokeAsync(null, null, null, symbolId: "M:TestLib.Shape.Area", ct: CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Result!.Implementations.Should().HaveCount(2);
+        result.Result.Implementations.Should().OnlyContain(l => l.FilePath.EndsWith("Shape.cs"));
+    }
+
+    [Test]
+    public async Task FindImplementations_skips_an_abstract_intermediate_override()
+    {
+        // TOOL-011 review: FindOverridesAsync is transitive and includes abstract overrides, which implement nothing.
+        await using var host = await TestHost.CreateAsync<FindImplementationsTool>();
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "TestSolution", "TestLib", "Shape.cs");
+        var backup = await File.ReadAllTextAsync(path);
+        try
+        {
+            await File.WriteAllTextAsync(path, backup +
+                "\npublic abstract class Polygon : Shape { public abstract override double Area(); }\n" +
+                "public class Triangle : Polygon { public override double Area() => 1; }\n");
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(1));
+
+            var result = await host.Tool.InvokeAsync(null, null, null, symbolId: "M:TestLib.Shape.Area", ct: CancellationToken.None);
+
+            result.Error.Should().BeNull();
+            result.Result!.Implementations.Should().HaveCount(3, "Circle, Square and Triangle — not Polygon");
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(path, backup);
+        }
+    }
+
     private static string Key(SymbolLocation l) => $"{l.FilePath}|{l.Line}:{l.Column}-{l.EndLine}:{l.EndColumn}";
 }

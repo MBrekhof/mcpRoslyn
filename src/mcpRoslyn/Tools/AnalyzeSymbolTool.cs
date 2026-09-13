@@ -147,10 +147,10 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
     private static async Task<AnalyzeSymbolSection<Contracts.SymbolInfo>?> GetImplementations(
         ISymbol s, Solution sol, int max, ConcurrentBag<string> trunc, CancellationToken ct)
     {
-        // Only types have implementations
-        if (s is not INamedTypeSymbol) return null;
+        // Types and implementable members, as find_implementations accepts (TOOL-011).
+        if (s is not (INamedTypeSymbol or IMethodSymbol or IPropertySymbol or IEventSymbol)) return null;
 
-        var impls = await SymbolFinder.FindImplementationsAsync(s, sol, cancellationToken: ct);
+        var impls = await RoslynHelpers.FindImplementationsOrOverridesAsync(s, sol, ct);
         var items = impls.Select(RoslynHelpers.ToSymbolInfo).ToList();
 
         var total = items.Count;

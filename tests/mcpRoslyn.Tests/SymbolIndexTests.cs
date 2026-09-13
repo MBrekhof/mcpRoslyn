@@ -22,7 +22,7 @@ public class SymbolIndexTests
     public async Task SymbolIndex_property_is_available_after_load()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
 
         await sut.LoadAsync();
         await sut.WarmupTask;
@@ -34,7 +34,7 @@ public class SymbolIndexTests
     public async Task QueryAttribute_returns_fixture_MyMarker_matches()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
 
         await sut.LoadAsync();
         await sut.WarmupTask;
@@ -50,7 +50,7 @@ public class SymbolIndexTests
     public async Task QueryReturnType_int_finds_partial_class_methods()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
 
         await sut.LoadAsync();
         await sut.WarmupTask;
@@ -66,7 +66,7 @@ public class SymbolIndexTests
     public async Task QueryParameterType_string_finds_Greet_methods()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
 
         await sut.LoadAsync();
         await sut.WarmupTask;
@@ -82,7 +82,7 @@ public class SymbolIndexTests
     public async Task QueryAttribute_dirty_walk_picks_up_newly_added_attribute()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
         await sut.LoadAsync();
         await sut.WarmupTask;
 
@@ -116,7 +116,7 @@ public class SymbolIndexTests
     public async Task QueryAttribute_dirty_walk_excludes_removed_attribute()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
         await sut.LoadAsync();
         await sut.WarmupTask;
 
@@ -155,7 +155,7 @@ public class SymbolIndexTests
     public async Task AllSymbols_dirty_walk_picks_up_a_newly_added_type()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
         await sut.LoadAsync();
         await sut.WarmupTask;
 
@@ -189,7 +189,7 @@ public class SymbolIndexTests
     public async Task ReloadAsync_constructs_fresh_index_with_empty_dirty_set()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
         await sut.LoadAsync();
         await sut.WarmupTask;
 
@@ -227,7 +227,7 @@ public class SymbolIndexTests
     public async Task QueryAttribute_partial_class_entry_invalidates_via_any_declaring_doc()
     {
         var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
-        var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
         await sut.LoadAsync();
         await sut.WarmupTask;
 

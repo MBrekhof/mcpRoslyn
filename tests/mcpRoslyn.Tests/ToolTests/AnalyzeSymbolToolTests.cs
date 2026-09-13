@@ -35,6 +35,26 @@ public sealed class AnalyzeSymbolToolTests
     }
 
     [Test]
+    public async Task Interface_member_returns_its_implementations()
+    {
+        // TOOL-011: the section was gated on INamedTypeSymbol, so members always came back null.
+        await using var host = await TestHost.CreateAsync<AnalyzeSymbolTool>();
+        var r = await host.Tool.InvokeAsync(symbolId: "M:TestLib.IGreeter.Greet(System.String)");
+        r.Result!.Implementations.Should().NotBeNull();
+        r.Result.Implementations!.Items.Should().Contain(s => s.Name == "Greet");
+    }
+
+    [Test]
+    public async Task Abstract_member_returns_its_overrides_as_implementations()
+    {
+        // TOOL-011 review: Roslyn's FindImplementationsAsync returns nothing for a class member.
+        await using var host = await TestHost.CreateAsync<AnalyzeSymbolTool>();
+        var r = await host.Tool.InvokeAsync(symbolId: "M:TestLib.Shape.Area");
+        r.Result!.Implementations!.Items.Select(s => s.ContainingType)
+            .Should().BeEquivalentTo("TestLib.Circle", "TestLib.Square");
+    }
+
+    [Test]
     public async Task Method_symbol_returns_null_derivedTypes()
     {
         await using var host = await TestHost.CreateAsync<AnalyzeSymbolTool>();

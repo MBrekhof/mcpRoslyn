@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using mcpRoslyn.Logging;
 using mcpRoslyn.Options;
+using mcpRoslyn.Tools;
 using mcpRoslyn.Workspace;
 
 // MUST be first - before any Microsoft.CodeAnalysis.* type is touched.
@@ -29,7 +30,10 @@ builder.Services.AddHostedService<WorkspaceLoaderHostedService>();
 builder.Services
     .AddMcpServer()
     .WithStdioServerTransport()
-    .WithToolsFromAssembly();
+    .WithToolsFromAssembly()
+    // A ToolResult carrying an Error also sets the MCP isError flag (TOOL-011).
+    .WithRequestFilters(filters => filters.AddCallToolFilter(next =>
+        (request, ct) => ToolCallOutcome.TrackAsync(() => next(request, ct))));
 
 await builder.Build().RunAsync();
 

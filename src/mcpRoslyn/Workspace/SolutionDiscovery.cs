@@ -63,11 +63,20 @@ public static class SolutionDiscovery
         return null;
     }
 
-    private static IEnumerable<FileInfo> SolutionsIn(DirectoryInfo dir) =>
-        dir.GetFiles("*.sln")
-            .Concat(dir.GetFiles("*.slnx"))
-            .OrderBy(f => f.Extension, StringComparer.OrdinalIgnoreCase) // .sln before .slnx
-            .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase);
+    /// <summary>An unreadable or vanished directory holds no solution; it must not abort discovery (TOOL-011).</summary>
+    private static IEnumerable<FileInfo> SolutionsIn(DirectoryInfo dir)
+    {
+        try
+        {
+            return dir.GetFiles("*.sln")
+                .Concat(dir.GetFiles("*.slnx"))
+                .OrderBy(f => f.Extension, StringComparer.OrdinalIgnoreCase) // .sln before .slnx
+                .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (UnauthorizedAccessException) { return []; }
+        catch (DirectoryNotFoundException) { return []; }
+    }
 
     private static bool IsSearchable(DirectoryInfo dir) =>
         (dir.Attributes & FileAttributes.ReparsePoint) == 0          // don't follow symlinks/junctions

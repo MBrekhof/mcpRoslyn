@@ -10,6 +10,21 @@ namespace mcpRoslyn.Tools;
 
 internal static class RoslynHelpers
 {
+    /// <summary>
+    /// What find_implementations and analyze_symbol mean by implementations. Roslyn's FindImplementationsAsync
+    /// answers for types and interface members only — for an abstract or virtual class member it returns
+    /// nothing — so there the answer is the member's concrete overrides (TOOL-011); an abstract override
+    /// passes the obligation on rather than meeting it. ponytail: an interface event's add/remove accessor
+    /// queried directly finds nothing (Roslyn excludes those accessors) — query the event itself.
+    /// </summary>
+    public static async Task<IEnumerable<ISymbol>> FindImplementationsOrOverridesAsync(
+        ISymbol symbol, Solution solution, CancellationToken ct)
+    {
+        if (symbol is not INamedTypeSymbol && symbol.ContainingType is { TypeKind: not TypeKind.Interface })
+            return (await SymbolFinder.FindOverridesAsync(symbol, solution, cancellationToken: ct)).Where(o => !o.IsAbstract);
+        return await SymbolFinder.FindImplementationsAsync(symbol, solution, cancellationToken: ct);
+    }
+
     public static Document? FindDocument(Solution solution, string filePath)
     {
         var normalized = Path.GetFullPath(filePath);

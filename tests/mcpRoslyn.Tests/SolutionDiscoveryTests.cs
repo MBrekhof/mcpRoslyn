@@ -107,6 +107,16 @@ public class SolutionDiscoveryTests
     }
 
     [Test]
+    public void Discover_skips_a_directory_it_cannot_list_instead_of_throwing()
+    {
+        // TOOL-011: GetFiles sat outside the DirectoryNotFound/UnauthorizedAccess guard, so a missing or
+        // unreadable directory aborted discovery.
+        var act = () => SolutionDiscovery.Discover(Path.Combine(_root, "gone"));
+
+        act.Should().NotThrow();
+    }
+
+    [Test]
     public void Discover_returns_null_when_no_solution_exists_in_tree()
     {
         Directory.CreateDirectory(Path.Combine(_root, "src", "empty"));

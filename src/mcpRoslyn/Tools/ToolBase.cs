@@ -1,8 +1,35 @@
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Protocol;
 using mcpRoslyn.Contracts;
 using mcpRoslyn.Workspace;
 
 namespace mcpRoslyn.Tools;
+
+/// <summary>
+/// Carries "this tool call failed" from <see cref="ToolBase"/> out to the call-tool filter, which sets the
+/// MCP result's <c>isError</c>: to the SDK a failed <see cref="ToolResult{T}"/> is an ordinary return value,
+/// so a client keyed on <c>isError</c> read every failure as success (TOOL-011). The filter installs the box
+/// before invoking the tool, because an AsyncLocal assigned inside the tool never flows back out.
+/// </summary>
+internal static class ToolCallOutcome
+{
+    private static readonly AsyncLocal<StrongBox<bool>?> Failed = new();
+
+    public static async ValueTask<CallToolResult> TrackAsync(Func<ValueTask<CallToolResult>> invoke)
+    {
+        var failed = new StrongBox<bool>();
+        Failed.Value = failed;
+        var result = await invoke();
+        if (failed.Value) result.IsError = true;
+        return result;
+    }
+
+    public static void MarkFailed()
+    {
+        if (Failed.Value is { } failed) failed.Value = true;
+    }
+}
 
 internal abstract class ToolBase(IWorkspaceService workspace, ILogger logger)
 {
@@ -10,6 +37,15 @@ internal abstract class ToolBase(IWorkspaceService workspace, ILogger logger)
     protected ILogger Log => logger;
 
     protected async Task<ToolResult<T>> ExecuteAsync<T>(
+        Func<CancellationToken, Task<ToolResult<T>>> body,
+        CancellationToken ct) where T : class
+    {
+        var result = await ExecuteCoreAsync(body, ct);
+        if (result.Error is not null) ToolCallOutcome.MarkFailed();
+        return result;
+    }
+
+    private async Task<ToolResult<T>> ExecuteCoreAsync<T>(
         Func<CancellationToken, Task<ToolResult<T>>> body,
         CancellationToken ct) where T : class
     {

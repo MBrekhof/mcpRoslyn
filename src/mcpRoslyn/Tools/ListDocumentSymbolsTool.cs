@@ -40,9 +40,11 @@ internal sealed class ListDocumentSymbolsTool(IWorkspaceService ws, ILogger<List
             var symbols = new List<Contracts.SymbolInfo>();
             foreach (var node in root.DescendantNodes())
             {
-                if (node is BaseTypeDeclarationSyntax or BaseMethodDeclarationSyntax
-                    or PropertyDeclarationSyntax or FieldDeclarationSyntax
-                    or EventDeclarationSyntax or EventFieldDeclarationSyntax)
+                // BasePropertyDeclarationSyntax covers properties, indexers and event declarations;
+                // delegates and enum members have syntax of their own (TOOL-011).
+                if (node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax or EnumMemberDeclarationSyntax
+                    or BaseMethodDeclarationSyntax or BasePropertyDeclarationSyntax
+                    or FieldDeclarationSyntax or EventFieldDeclarationSyntax)
                 {
                     // FieldDeclarationSyntax / EventFieldDeclarationSyntax declare multiple variables.
                     // GetDeclaredSymbol on the parent node returns null; we need to walk variables.

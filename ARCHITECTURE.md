@@ -115,7 +115,7 @@ Analyzer execution failures are returned as Roslyn's `AD0001` diagnostics alongs
 Three layers:
 
 1. **Protocol** — MCP SDK handles malformed JSON-RPC.
-2. **Tool envelope** (`ToolBase.ExecuteAsync`) — catches `FileNotFoundException`, `InvalidOperationException`, generic `Exception`; returns `ToolError { code, message, hint? }`.
+2. **Tool envelope** (`ToolBase.ExecuteAsync`) — catches `FileNotFoundException`, `InvalidOperationException`, generic `Exception`; returns `ToolError { code, message, hint? }`. To the SDK that is an ordinary return value, so a call-tool filter (`Program.cs`, `ToolCallOutcome`) also sets the MCP result's `isError` whenever the returned `ToolResult` carries an `Error` — the payload is unchanged (TOOL-011).
 3. **Empty results** — `find_references` on an unused symbol returns `[]`, not an error. Empty is not failure.
 
 Codes: `WORKSPACE_NOT_LOADED`, `FILE_NOT_IN_WORKSPACE`, `SYMBOL_NOT_FOUND`, `POSITION_INVALID`, `INVALID_PATTERN`, `RENAME_CONFLICT`, `FILE_READ_ONLY`, `FILE_LOCKED`, `UNSUPPORTED_ENCODING`, `STALE_FILE`, `LINKED_FILE_CONFLICT`, `PARTIAL_WRITE`, `INDEX_UNAVAILABLE`, `AMBIGUOUS_SYMBOL_ID`, `PROJECT_NOT_FOUND`, `INTERNAL_ERROR`.

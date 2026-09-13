@@ -32,16 +32,22 @@ internal sealed class TestWorkspaceHost : IAsyncDisposable
 internal sealed class ToolHost<T> : IAsyncDisposable where T : class
 {
     private readonly WorkspaceService _workspace;
+    private readonly ServiceProvider _services;
 
-    internal ToolHost(T tool, WorkspaceService workspace)
+    internal ToolHost(T tool, WorkspaceService workspace, ServiceProvider services)
     {
         Tool = tool;
         _workspace = workspace;
+        _services = services;
     }
 
     public T Tool { get; }
 
-    public ValueTask DisposeAsync() => _workspace.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        await _services.DisposeAsync(); // the workspace was registered as an instance, so it is not disposed here
+        await _workspace.DisposeAsync();
+    }
 }
 
 internal static class TestHost
@@ -64,8 +70,8 @@ internal static class TestHost
         services.AddSingleton<IWorkspaceService>(workspace);
         services.AddSingleton<T>();
         services.AddLogging();
-        var tool = services.BuildServiceProvider().GetRequiredService<T>();
-        return new ToolHost<T>(tool, workspace);
+        var provider = services.BuildServiceProvider();
+        return new ToolHost<T>(provider.GetRequiredService<T>(), workspace, provider);
     }
 
     /// <summary>
