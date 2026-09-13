@@ -1,6 +1,40 @@
 # Session Handoff
 
-**Last updated:** 2026-09-13 (every card from the 2026-09-12 Codex review closed, plus WS-005 and WS-007)
+**Last updated:** 2026-09-13 afternoon (VAL-001 closed; its four follow-up cards built with Codex reviews)
+
+## What the 2026-09-13 VAL-001 session did
+
+VAL-001 ran as two BPG sessions. The report is `docs/acceptance/2026-09-13-val-001-bpg-session.md`.
+- **Adoption:** the blind run showed the agent using `find_references` for the reference questions that decided a
+  deletion, the reverse of 2026-08-15's "grep is the reflex".
+- **Grep hook:** the PreToolUse hook never fired in either run, so it was removed from `~/.claude/settings.json`.
+- **TOOL-007** closed unbuilt on its own gate.
+
+A `/loop` then built the four cards the runs filed. Each went fix → Codex review → re-fix, with the full suite green
+before every commit:
+
+| Card | Commit | What changed | Codex rounds |
+|---|---|---|---|
+| TOOL-012 | `4f02b17` | dead-code skips the compilation's entry point | 1 |
+| DIAG-003 | `d752b4f` | `get_compilation_errors` applies DiagnosticSuppressors by default. BPG.Data: 13 false CS8618 → 0. Solution-wide: ~45 → ~340 ms. | 1 |
+| TOOL-014 | `8d834fe` | `find_registrations` returns `unregisteredTypes` on an empty match; shared `RegistrationLookup`; the index reads registration types from the bound method | 11 |
+| TOOL-013 | `20124e2` | dead-code chains (`only-referenced-by-dead-code`, `keptAliveBy`); analysis completes before the cap; `registrationsWithOnlyDeadConsumers` evidence | 4 |
+
+### Findings worth remembering
+
+- **A negative claim ("unregistered", "dead") needs complete evidence, and Codex keeps finding the shape you didn't
+  model.** TOOL-014 took eleven rounds. They only stopped once registration types came from the bound method
+  (`IMethodSymbol.TypeArguments`, `IInvocationOperation` arguments by parameter name) instead of syntax. Fix the
+  evidence layer, not the claim.
+- **A dead declaration's span must match what dies with the symbol:**
+  - a field's declaring syntax is only its declarator
+  - a partial method's resolved symbol can be the body-less part
+  - an initializer runs even when the field is never read
+  - static constructors and finalizers are runtime-invoked
+- **The hosted-service index lists every `BackgroundService` subclass**, registered or not. Only `Kind == "registered"`
+  entries are registrations; dead-code used to treat all of them as registered.
+- **Claiming a second ContextBoard card can release the first.** `complete_card` then answers `notowner`, so re-claim
+  before completing.
 
 ## What the 2026-09-12/13 session did
 
@@ -40,12 +74,13 @@ every commit, and each closure in `TODO.md` cites its SHA.
 
 ## Where things stand (2026-09-13)
 
-- **`main` is pushed** (last code commit `cf3b81c`). **198 tests pass**, 0 failing.
-- **Published exe is CURRENT** — republished 2026-09-13 07:01 from `a5cdf08`, so it carries every commit above. Sessions
-  started before then still ran the old server; restart them. Republish after any src change:
-  `dotnet publish src/mcpRoslyn -c Release -o bin/publish` (stop running `mcpRoslyn.exe` first).
-- **Open cards are all deferred or blocked:** VAL-001 (real-session validation) is the only actionable one; TOOL-004,
-  TOOL-005 and TOOL-007 wait on it; DIST-001/002/003 and ARCH-001 stay deferred by their own bodies.
+- **`main` is NOT pushed past `ba934ea`.** The four card commits and their closure docs are local. **227 tests pass**, 0
+  failing.
+- **The published exe is STALE:** it is still `a5cdf08`, so it has none of TOOL-012/013/014 or DIAG-003. To republish:
+  `dotnet publish src/mcpRoslyn -c Release -o bin/publish`. Stop running `mcpRoslyn.exe` first, which drops the MCP
+  server from every open session until it restarts.
+- **No actionable cards.** The Backlog holds TOOL-004 and TOOL-005 (VAL-001 found no evidence either way), DIST-001/002/003
+  and ARCH-001, each deferred by its own body.
 
 ## What the 2026-08-15 session did
 

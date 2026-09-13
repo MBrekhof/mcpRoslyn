@@ -487,7 +487,19 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
   An entry point is never referenced, by definition. Run 2's agent already dismissed it as "a known false positive". Noise at high confidence teaches agents to discount the high bucket.
 
   **Fix direction:** skip the method `Compilation.GetEntryPoint` returns. That also covers a classic `static Main`; whether that one is reported today is unverified, so add a fixture for both shapes.
-- [ ] **TOOL-013: find_dead_code_candidates misses code kept alive only by dead code** (ID: 1679) — Todo, feature
+- [x] ~~**TOOL-013: find_dead_code_candidates misses code kept alive only by dead code**~~ (ID: 1679)
+  Done 2026-09-13 (`20124e2`), built as the design below.
+  - **Chains:** analysis runs to a fixed point. A symbol whose every in-source reference sits inside an already-dead declaration is reported as `only-referenced-by-dead-code`, at medium confidence, with `keptAliveBy` naming the innermost dead declarations.
+  - **Scan and cap:** every eligible symbol is scanned, and `maxResults` caps the finished analysis, so a capped result is a prefix of the full one. This replaces TOOL-003's early stop. BPG warm cost is 438 ms, inside the earlier ~345–590 ms range.
+  - **Evidence:** with `includePublicTypes`, `registrationsWithOnlyDeadConsumers` lists registrations whose every observed constructor consumer is a candidate.
+
+  Four Codex rounds fixed what a dead declaration covers:
+  - partial-method implementation parts
+  - a sole-variable field's type
+  - never an initializer, which runs whether or not the field is read
+
+  Static constructors and finalizers are now runtime-invoked, never candidates; an explicit static constructor used to be reported dead. Consumers are matched by name plus declaring file. Option C (test references as non-use) was not built.
+
   Found 2026-09-13 in VAL-001 (`docs/acceptance/2026-09-13-val-001-bpg-session.md`).
 
   On BPG the scan found `CodeGenerationService`/`V2` but not what only they kept alive:
