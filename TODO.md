@@ -439,7 +439,9 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
   - `severity: "Info"` or `"Hidden"` is always filtered out by the default `minimumSeverity: "Warning"` (`:52`). An explicit exact severity should bypass the threshold.
 
   Touches the same filters as DIAG-001 — do this first or together.
-- [ ] **TOOL-011: Low-severity sweep from the 2026-09-12 Codex review.** (ID: 1650)
+- [x] ~~**TOOL-011: Low-severity sweep from the 2026-09-12 Codex review.**~~ (ID: 1650)
+  Done 2026-09-13 (`07223b3`). `analyze_symbol` fills implementations for members; review found that Roslyn's `FindImplementationsAsync` answers only for types and interface members, so abstract/virtual class members came back empty there *and* in `find_implementations` (whose description promises them) — a shared `RoslynHelpers.FindImplementationsOrOverridesAsync` uses `FindOverridesAsync` for class members, skipping abstract intermediate overrides. Left documented: an interface event's `add`/`remove` accessor queried directly finds nothing (Roslyn excludes those accessors). `list_document_symbols` lists indexers, delegates and enum members. `SolutionDiscovery` skips an unreadable or vanished directory. The SDK claim held: a failed call now sets MCP `isError` (ToolBase marks it, a call-tool filter sets the flag; payload unchanged), proven through the real stdio transport in `McpProtocolTests`. Every test `WorkspaceService` is disposed and `ToolHost` disposes its `ServiceProvider`. Three Codex review rounds.
+
   From the 2026-09-12 Codex review (findings 11, 16, 20, 23, 24), verified against the code. Each is small; batched.
 
   - `analyze_symbol` returns `Implementations: null` for interface/abstract **members** — `AnalyzeSymbolTool.cs:151` gates on `INamedTypeSymbol`, while `find_implementations` handles members. Drop the gate for implementable members.
