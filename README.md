@@ -2,7 +2,18 @@
 
 MCP server exposing C# symbol-level navigation (find-references, goto-definition, find-implementations, semantic-search, rename, etc.) to AI coding agents. Wraps Roslyn's `MSBuildWorkspace` and serves over stdio.
 
-**Status:** v1.3 — feature expansion shipped and tagged `v1.3.0`, with post-tag fixes on top of it. 20 tools plus `echo`, 198 tests. See [`docs/acceptance/`](docs/acceptance/) for measured timings. v1 design at [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md). High-level architecture summary at [`ARCHITECTURE.md`](ARCHITECTURE.md). Open work tracked in [`TODO.md`](TODO.md).
+**Status:** v1.3, tagged `v1.3.0`, with post-tag fixes on top. 20 tools plus `echo`, 227 tests. Measured timings are in [`docs/acceptance/`](docs/acceptance/), the v1 design in [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md), the architecture summary in [`ARCHITECTURE.md`](ARCHITECTURE.md), and open work in [`TODO.md`](TODO.md).
+
+## Latest session (2026-09-13)
+
+- `find_dead_code_candidates` no longer reports the program entry point, static constructors or finalizers as dead.
+- `find_dead_code_candidates` also reports code used only by other dead code (`only-referenced-by-dead-code`, with `keptAliveBy`).
+- `find_dead_code_candidates` lists DI registrations whose only constructor consumers are dead (`registrationsWithOnlyDeadConsumers`).
+- `get_compilation_errors` applies the project's DiagnosticSuppressors, so EF Core's CS8618 on `DbSet` no longer shows as a false error.
+- `find_registrations` names the matching types that exist but aren't registered when a query finds nothing (`unregisteredTypes`).
+- DI registrations resolve inferred, `typeof`, factory and instance forms to real types, and unregistered `BackgroundService` subclasses no longer count as registered.
+
+Earlier changes are in [`CHANGELOG.md`](CHANGELOG.md), and per-session detail in [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md).
 
 ## Why
 
