@@ -119,6 +119,18 @@ public sealed class FindDeadCodeCandidatesToolTests
     }
 
     [Test]
+    public async Task Program_entry_point_is_never_a_candidate()
+    {
+        // TOOL-012: TestApp and TestWeb use top-level statements. The compiler-synthesized entry point
+        // is private and unreferenced by definition, and was reported as dead at high confidence.
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var r = await host.Tool.InvokeAsync(includePublicTypes: true, maxResults: 1000);
+
+        r.Error.Should().BeNull();
+        r.Result!.Candidates.Should().NotContain(c => c.Symbol.Contains("top-level-statements-entry-point"));
+    }
+
+    [Test]
     public async Task Framework_reached_public_types_are_suppressed_from_the_public_sweep()
     {
         await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();

@@ -130,6 +130,8 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
                     if (isInternalLevel && !includeInternalTypes) continue;
                 }
 
+                // The runtime calls the entry point; nothing in source ever references it (TOOL-012).
+                if (await IsEntryPointAsync(copies, solution, ct2)) { frameworkSkip++; continue; }
                 if (copies.Any(IsDenylisted)) { denySkip++; continue; }
 
                 // Everything above is cheap; the reference scan is not. Once the result set is full
@@ -252,6 +254,24 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
         }
 
         private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+    }
+
+    /// <summary>
+    /// True when a copy is the method its compilation reports as the entry point: top-level statements'
+    /// synthesized method or a classic <c>static Main</c>. Asked of the compilation rather than matched by
+    /// name, so a <c>Main</c> the compiler ignores (a library's, or one shadowed by top-level statements)
+    /// is still judged like any other method.
+    /// </summary>
+    private static async Task<bool> IsEntryPointAsync(IReadOnlyList<ISymbol> copies, Solution solution, CancellationToken ct)
+    {
+        foreach (var copy in copies)
+        {
+            if (copy is not IMethodSymbol { IsStatic: true } method) continue;
+            var project = solution.GetProject(method.ContainingAssembly, ct);
+            var compilation = project is null ? null : await project.GetCompilationAsync(ct);
+            if (SymbolEqualityComparer.Default.Equals(compilation?.GetEntryPoint(ct), method)) return true;
+        }
+        return false;
     }
 
     private static int ExposureRank(Accessibility accessibility) => accessibility switch
