@@ -282,7 +282,11 @@ mcpRoslyn answers on a branch with compile errors on the floor.
   bare compile check returns 11 tokens (four count headers); its output is `key=value` + tab-indented tree rather
   than JSON, which is where most of the gap to our responses will come from.
 
-- [ ] **TOOL-007: Semantic diff against a baseline.** (ID: 1313) — Backlog, **blocked on VAL-001**
+- [x] ~~**TOOL-007: Semantic diff against a baseline.**~~ (ID: 1313)
+  Closed unbuilt 2026-09-13 (`9093ca6`). Its own gate was met: in the blind VAL-001 run the agent read
+  `git diff --cached --stat` and verified with build, tests and a dead-code rescan, and nothing asked "what public API
+  did I change". Reopen if a real session does.
+
   "What public API did this branch change" — added/removed/re-signatured members vs the branch point. Carded so it
   isn't lost, **not** because it is justified. `git diff` already answers "which lines changed" far more cheaply; this
   is only worth building for the part git can't do — telling a signature change from a comment reflow, or noticing a
@@ -471,9 +475,47 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
 
   roslynk (Morris.Roslynk.Mcp) `get_diagnostics includeAnalyzers:false` has the identical behaviour, so this is a shared Roslyn-API trap, not an mcpRoslyn-only regression.
 
-## Real-session validation (still to do)
+- [ ] **TOOL-012: find_dead_code_candidates reports the program entry point as dead, at high confidence** (ID: 1678) — Todo, bug
+  Found 2026-09-13 in VAL-001 (both BPG runs; `docs/acceptance/2026-09-13-val-001-bpg-session.md`).
 
-- [ ] **VAL-001: Use mcpRoslyn in one feature-sized task.** (ID: 1171) — **in Todo, est. 4 h**
+  `find_dead_code_candidates includePublicTypes:true` on BPG returns `<top-level-statements-entry-point>` (`Program.cs:1-432`): kind Method, Private, confidence **high**, reason `no-references`. It survives every filter in `FindDeadCodeCandidatesTool.cs`. It is private, so the public-type branch that already exempts `*Program` via `IsFrameworkReached` never runs (`:109-131`). And `IsDenylisted` only skips `IsImplicitlyDeclared` symbols (`:272`), which the synthesized top-level entry point evidently isn't.
+
+  An entry point is never referenced, by definition. Run 2's agent already dismissed it as "a known false positive". Noise at high confidence teaches agents to discount the high bucket.
+
+  **Fix direction:** skip the method `Compilation.GetEntryPoint` returns. That also covers a classic `static Main`; whether that one is reported today is unverified, so add a fixture for both shapes.
+- [ ] **TOOL-013: find_dead_code_candidates misses code kept alive only by dead code** (ID: 1679) — Todo, feature
+  Found 2026-09-13 in VAL-001 (`docs/acceptance/2026-09-13-val-001-bpg-session.md`).
+
+  On BPG the scan found `CodeGenerationService`/`V2` but not what only they kept alive:
+  - `LLMService` is registered (`AddScoped<ILLMService, LLMService>()`), so it is suppressed at `FindDeadCodeCandidatesTool.cs:119` (the `diRegistered` counter), even though its only constructor consumers were the two dead classes.
+  - `LlmResiliencePolicy` (Polly) was referenced only from `LLMService`.
+
+  The agent got there by reasoning over `find_registrations` consumers and the card text. The DEAD-001 deletion (BPG `c1dad61`) removed 1,683 lines; the two classes the tool named account for 872 of them.
+
+  **Two gaps, both "reachable only from dead code":**
+  - a registered service whose only consumers are themselves candidates (`find_registrations`' `likelyConsumers` already computes this)
+  - a type whose only references come from inside candidates
+
+  **Direction:** after the first pass, iterate to a fixed point, marking a symbol dead when every reference, or every consumer of its registration, lies inside an already-dead declaration. Give these their own reason (e.g. `only-referenced-by-dead-code`) and medium confidence, since one false root poisons the whole chain. Watch the cost: the reference scan (`:147`) is the expensive part.
+- [ ] **TOOL-014: find_registrations returns nothing useful when the query names an unregistered type** (ID: 1680) — Todo, feature
+  Found 2026-09-13 in VAL-001 run 1 (`docs/acceptance/2026-09-13-val-001-bpg-session.md`).
+
+  `find_registrations query:"CodeGenerationService"` returned `{"registrations":[],"unclassified":[],"truncated":[]}`. The type existed and was not registered, which was exactly the answer the agent needed. But an empty result reads the same as a typo or a type that doesn't exist, so the agent followed up with two greps (`\bILLMService\b`, `\b(CodeGenerationService|CodeGenerationServiceV2)\b`).
+
+  Matching is a substring test over service type, impl type and raw call (`FindRegistrationsTool.cs:111-115`).
+
+  **Direction:** only when nothing matches, look the query up in the SymbolIndex and return the matching type names as e.g. `unregisteredTypes: ["BPG.CodeGeneration.Services.CodeGenerationService", ...]`, capped. That is one lookup, and only on the empty path.
+
+## Real-session validation
+
+- [x] ~~**VAL-001: Use mcpRoslyn in one feature-sized task.**~~ (ID: 1171)
+  Done 2026-09-13 (`9093ca6`). Two BPG sessions; the report is `docs/acceptance/2026-09-13-val-001-bpg-session.md`.
+  - **Adoption:** in the blind run (DEAD-001) the agent used `find_references` for the reference questions that
+    decided the deletion, and grep only for sweeps across code and docs. That is the reverse of 2026-08-15.
+  - `find_dead_code_candidates` earned its keep, and cold start didn't hurt.
+  - The Grep hook never fired in either run and has been removed.
+  - Filed DIAG-003, TOOL-012, TOOL-013 and TOOL-014; closed TOOL-007 unbuilt.
+
   Do one feature-sized task in a real repo with the MCP server connected, and write down how the tools actually behaved
   in the agent loop. The acceptance logs cover correctness of canned queries; they do not cover end-to-end usefulness.
   Highest-value remaining item — it is the only thing that can unblock TOOL-004 and TOOL-005, both of which say in
