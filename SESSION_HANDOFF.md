@@ -1,6 +1,51 @@
 # Session Handoff
 
-**Last updated:** 2026-08-15 (all TOOL cards and all bug cards closed; no open GitHub issues)
+**Last updated:** 2026-09-13 (every card from the 2026-09-12 Codex review closed, plus WS-005 and WS-007)
+
+## What the 2026-09-12/13 session did
+
+A `/loop` fix-review routine: Codex reviewed the whole project read-only (verbatim at
+[`docs/reviews/2026-09-12-codex-review.md`](docs/reviews/2026-09-12-codex-review.md)); agreed points became cards; then
+each card went fix → Codex review → re-fix until a round came back clean (2–5 rounds per card), full suite green before
+every commit, and each closure in `TODO.md` cites its SHA.
+
+| Card | Commit | What changed |
+|---|---|---|
+| DIAG-001 | `5a64d28` | analyzer diagnostics surfaced (per-file and solution-wide) |
+| PERF-002 | `9e313ac` | per-tool response sizes measured; rename preview fixed, symbol lists capped |
+| WS-006, IDX-002 | `bc089c9` | reloads publish atomic generations; indexed tools wait for their index |
+| TOOL-010 | `0a989bd` | line/column validated before resolving (`POSITION_INVALID`) |
+| IDX-003 | `89d220a` | BackgroundService subclasses found per document, so a refresh keeps them |
+| TOOL-009 | `911c449` | routes / hosted services must be the real extensions, not same-named calls |
+| IDX-005 | `60a3ae6` | same-named symbols in different assemblies stay distinct (`AMBIGUOUS_SYMBOL_ID`) |
+| DIAG-002 | `484c676` | `get_compilation_errors` reports `LoadFailures`, `PROJECT_NOT_FOUND`, honest filters |
+| TOOL-008 | `10dc91b` | `rename_symbol` checks every file (lock, encoding, staleness) before writing any |
+| IDX-004 | `11dd09f` | file changes folded into both indexes once, atomically |
+| TOOL-011 | `07223b3` | low-severity sweep; MCP `isError` set on failures (stdio-proven) |
+| WS-007 | `c24ad80` | stale workspace detected and reported as `warnings` on every tool result |
+| WS-005 | `cf3b81c` | discovery prefers the solution declaring the most C#/VB projects; `reload_workspace(solutionPath)` switches |
+
+### Findings worth remembering
+
+- **Codex rounds found real bugs in the fixes, not just the originals** — e.g. IDX-004's first fix lost invalidations
+  when a later file read failed; WS-007's first fix missed populated directories moved into a project (one event for
+  the directory, none for its files). Budget for the second and third round; the first clean-looking fix rarely is.
+- **Roslyn's `FindImplementationsAsync` answers only for types and interface members.** Abstract/virtual class members
+  need `FindOverridesAsync` (minus abstract intermediate overrides) — `find_implementations` had silently returned
+  nothing for them since v1.
+- **The MCP SDK binds a C# parameter without a default as *required*.** A protocol test that omits it fails in the SDK
+  before reaching the tool, which looks like the behaviour under test; pass every argument.
+- **The TODO.md sync closes a card the moment an `[x]` lands on disk**, even uncommitted — `complete_card` afterwards
+  returns `done`/`notowner`. The closure text in `TODO.md` is then the only conclusion; write it fully.
+
+## Where things stand (2026-09-13)
+
+- **`main` is pushed** (last code commit `cf3b81c`). **198 tests pass**, 0 failing.
+- **Published exe is STALE** — `bin/publish/mcpRoslyn.exe` is from 2026-08-15 09:47 and predates every commit above.
+  Live Claude Code sessions still run the old server. Republish when no session needs it:
+  `dotnet publish src/mcpRoslyn -c Release -o bin/publish` (stop running `mcpRoslyn.exe` first).
+- **Open cards are all deferred or blocked:** VAL-001 (real-session validation) is the only actionable one; TOOL-004,
+  TOOL-005 and TOOL-007 wait on it; DIST-001/002/003 and ARCH-001 stay deferred by their own bodies.
 
 ## What the 2026-08-15 session did
 
@@ -193,7 +238,7 @@ every measurement this session was read as a ratio against `InvocationIndex` bui
 ## Known limitations / gotchas (unchanged)
 
 - **Windows-only.** `MSBuildLocator` and path-comparison code aren't portable yet.
-- **Project-file changes need explicit `reload_workspace`.** Per-call mtime refresh only walks already-known documents. Same for the index — new symbols in new files won't appear until reload.
+- **Project-file changes and new/deleted files need explicit `reload_workspace`.** Per-call mtime refresh only walks already-known documents. Since WS-007 they are *detected*: every tool result carries a `warnings` entry naming what changed until a reload.
 - **Stderr capture window** of Claude Code is no longer a problem; use `--log-file <path>`.
 - **`duetGPT.LicenseServer` silent drop no longer happens** (WS-001, closed 2026-08-15 as not-reproducible): the
   repo-root `duetGPT.sln` declares 4 projects and all 4 load, LicenseServer included. The old nested
