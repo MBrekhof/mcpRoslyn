@@ -135,12 +135,14 @@ On `duetGPT.sln` (4 loaded projects, 598 .cs files), measured cold-start and que
 
 All warm-up cost stays in the background — `LoadAsync` returns at the same time. Full detail in [`docs/acceptance/`](docs/acceptance/).
 
-**Index build costs, re-measured 2026-08-15** (published exe, cold process):
+**Index build costs, re-measured 2026-09-13** (published exe `cb88412`, cold process; BPG over 3 runs, duetGPT over 2):
 
-| Solution | Projects | `SymbolIndex` | `InvocationIndex` |
-|---|---|---|---|
-| `BPG.sln` | 8 | 128 ms | 1 715 ms |
-| `duetGPT.sln` | 4 | ~400 ms | ~12 200 ms |
+| Solution | Projects | Warm-up | `SymbolIndex` | `InvocationIndex` |
+|---|---|---|---|---|
+| `BPG.sln` | 8 | ~2.5 s | 91–125 ms | ~925 ms |
+| `duetGPT.sln` | 4 | ~10.9 s | 258–387 ms | ~6 400 ms |
+
+On 2026-08-15 `InvocationIndex` measured 1 715 ms on BPG and ~12 200 ms on duetGPT. Raw timings on this machine swing up to ~2× with no code change, and BPG has since lost ~1 700 lines of dead code, so read the drop as a trend rather than a result.
 
 `SymbolIndex` used to dominate this list; it was walking every referenced assembly (the whole BCL, every package) and discarding the result. Fixing the walk root cut it ~20–27× with an identical index — so `InvocationIndex` is now the only meaningful index cost.
 
