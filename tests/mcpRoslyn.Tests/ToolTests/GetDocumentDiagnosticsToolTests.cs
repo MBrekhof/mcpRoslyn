@@ -146,7 +146,7 @@ public class GetDocumentDiagnosticsToolTests
 
     // Instantiated directly by tests; this is not a discoverable analyzer assembly.
 #pragma warning disable RS1001
-    private sealed class UnusedLocalSuppressor : DiagnosticSuppressor
+    internal sealed class UnusedLocalSuppressor : DiagnosticSuppressor
     {
         private static readonly SuppressionDescriptor Descriptor =
             new("TESTSPR001", "CS0219", "Unused locals are allowed in this test.");

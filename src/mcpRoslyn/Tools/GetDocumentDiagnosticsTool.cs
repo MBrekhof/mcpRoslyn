@@ -49,30 +49,12 @@ internal sealed class GetDocumentDiagnosticsTool(IWorkspaceService ws, ILogger<G
             if (withAnalyzers is not null)
             {
                 var tree = semantic.SyntaxTree;
-                var suppressors = withAnalyzers.Analyzers
-                    .Where(a => a is DiagnosticSuppressor)
-                    .ToImmutableArray();
-                if (suppressors.Any(a =>
-                    {
-                        try
-                        {
-                            return ((DiagnosticSuppressor)a).SupportedSuppressions
-                                .Any(s => diagnostics.Any(d => d.Id == s.SuppressedDiagnosticId));
-                        }
-                        catch (Exception ex) when (ex is not OperationCanceledException)
-                        {
-                            return false; // Roslyn reports the getter failure when analyzers run.
-                        }
-                    }))
-                {
-                    // Compiler suppressors require a whole-compilation pass; run only when this
-                    // file has a diagnostic they can suppress, and keep ordinary analyzers scoped.
-                    var withSuppressors = semantic.Compilation.WithAnalyzers(
-                        suppressors, withAnalyzers.AnalysisOptions);
-                    diagnostics = (await withSuppressors.GetAllDiagnosticsAsync(ct2))
-                        .Where(d => d.Location.SourceTree == tree ||
-                            d.AdditionalLocations.Any(location => location.SourceTree == tree));
-                }
+                // Compiler suppressors require a whole-compilation pass; it runs only when this file has a
+                // diagnostic they can suppress, and ordinary analyzers stay scoped to the tree.
+                var suppressed = await RoslynHelpers.ApplySuppressorsAsync(semantic.Compilation, withAnalyzers, diagnostics, ct2);
+                if (suppressed is not null)
+                    diagnostics = suppressed.Where(d => d.Location.SourceTree == tree ||
+                        d.AdditionalLocations.Any(location => location.SourceTree == tree));
 
                 // Scoped to this one tree, so the cost is one file's analysis, not the project's.
                 // The semantic model must come from the analyzer compilation, not the original.

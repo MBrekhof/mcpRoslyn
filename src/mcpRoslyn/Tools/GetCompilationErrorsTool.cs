@@ -16,7 +16,7 @@ internal sealed class GetCompilationErrorsTool(IWorkspaceService ws, ILogger<Get
     : ToolBase(ws, log)
 {
     [McpServerTool(Name = "get_compilation_errors")]
-    [Description("Compiler diagnostics for every project that loaded — close to 'would dotnet build succeed?' without invoking MSBuild, but whatever failed to load contributes nothing, so check LoadFailures before trusting a clean result (reload_workspace lists them). Defaults: minimumSeverity=\"Warning\" (Info/Hidden hidden), includeGenerated=true; pass minimumSeverity=\"All\" to see everything, or an exact severity (it overrides the minimum). excludeDiagnosticCodes accepts a string array. projectName matches a project's name — a multi-targeted project also by its name without the \"(tfm)\" suffix; an unknown name is PROJECT_NOT_FOUND. includeAnalyzers=true also runs the project's own analyzers (NetAnalyzers, StyleCop, …) at their configured .editorconfig severities — 'does it pass this project's bar', not just 'does it compile'; off by default because it re-runs every analyzer on the whole solution (seconds). For one file, get_document_diagnostics runs analyzers by default.")]
+    [Description("Compiler diagnostics for every project that loaded — close to 'would dotnet build succeed?' without invoking MSBuild, but whatever failed to load contributes nothing, so check LoadFailures before trusting a clean result (reload_workspace lists them). Defaults: minimumSeverity=\"Warning\" (Info/Hidden hidden), includeGenerated=true; pass minimumSeverity=\"All\" to see everything, or an exact severity (it overrides the minimum). excludeDiagnosticCodes accepts a string array. projectName matches a project's name — a multi-targeted project also by its name without the \"(tfm)\" suffix; an unknown name is PROJECT_NOT_FOUND. The project's DiagnosticSuppressors are always applied, as the build applies them (EF Core's CS8618 on DbSet properties). includeAnalyzers=true also runs the project's own analyzers (NetAnalyzers, StyleCop, …) at their configured .editorconfig severities — 'does it pass this project's bar', not just 'does it compile'; off by default because it re-runs every analyzer on the whole solution (seconds). For one file, get_document_diagnostics runs analyzers by default.")]
     public Task<Contracts.ToolResult<GetCompilationErrorsResult>> InvokeAsync(
         string? severity, string? projectName,
         bool includeGenerated = true,
@@ -47,10 +47,19 @@ internal sealed class GetCompilationErrorsTool(IWorkspaceService ws, ILogger<Get
                 var compilation = await project.GetCompilationAsync(ct2);
                 if (compilation is null) continue;
 
-                var withAnalyzers = includeAnalyzers ? RoslynHelpers.WithProjectAnalyzers(project, compilation) : null;
-                var diagnostics = withAnalyzers is null
-                    ? compilation.GetDiagnostics(ct2)
-                    : await withAnalyzers.GetAllDiagnosticsAsync(ct2); // compiler + analyzer diagnostics
+                var withAnalyzers = RoslynHelpers.WithProjectAnalyzers(project, compilation);
+                IEnumerable<Diagnostic> diagnostics;
+                if (includeAnalyzers && withAnalyzers is not null)
+                    diagnostics = await withAnalyzers.GetAllDiagnosticsAsync(ct2); // compiler + analyzer diagnostics
+                else
+                {
+                    diagnostics = compilation.GetDiagnostics(ct2);
+                    // Suppressors are part of what the build reports, not optional analysis: without them an EF
+                    // Core project with WarningsAsErrors=Nullable shows CS8618 errors it doesn't have (DIAG-003).
+                    if (withAnalyzers is not null)
+                        diagnostics = await RoslynHelpers.ApplySuppressorsAsync(compilation, withAnalyzers, diagnostics, ct2)
+                                      ?? diagnostics;
+                }
 
                 foreach (var d in diagnostics)
                 {

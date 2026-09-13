@@ -143,6 +143,34 @@ internal static class RoslynHelpers
                 concurrentAnalysis: true, logAnalyzerExecutionTime: false, reportSuppressedDiagnostics: false));
     }
 
+    /// <summary>
+    /// <paramref name="compilerDiagnostics"/> as the build reports them: the project's <c>DiagnosticSuppressor</c>s
+    /// applied (EF Core's CS8618-on-DbSet is the common one). Suppressors only run through a whole-compilation
+    /// <c>CompilationWithAnalyzers</c> pass holding nothing but the suppressors, so this returns null, and costs
+    /// nothing, unless one of them can suppress an ID present in <paramref name="compilerDiagnostics"/>. The
+    /// result covers every tree in the compilation (DIAG-001, DIAG-003).
+    /// </summary>
+    public static async Task<IReadOnlyList<Diagnostic>?> ApplySuppressorsAsync(Compilation compilation,
+        CompilationWithAnalyzers withAnalyzers, IEnumerable<Diagnostic> compilerDiagnostics, CancellationToken ct)
+    {
+        var suppressors = withAnalyzers.Analyzers.Where(a => a is DiagnosticSuppressor).ToImmutableArray();
+        var ids = compilerDiagnostics.Select(d => d.Id).ToHashSet(StringComparer.Ordinal);
+        if (!suppressors.Any(a =>
+            {
+                try
+                {
+                    return ((DiagnosticSuppressor)a).SupportedSuppressions.Any(s => ids.Contains(s.SuppressedDiagnosticId));
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    return false; // Roslyn reports the getter failure when analyzers run.
+                }
+            }))
+            return null;
+
+        return await compilation.WithAnalyzers(suppressors, withAnalyzers.AnalysisOptions).GetAllDiagnosticsAsync(ct);
+    }
+
     public static SymbolLocation? ToLocation(Location loc)
     {
         if (!loc.IsInSource || loc.SourceTree?.FilePath is null) return null;

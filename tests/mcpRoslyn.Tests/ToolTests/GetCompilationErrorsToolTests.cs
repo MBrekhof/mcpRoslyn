@@ -1,5 +1,9 @@
 using FluentAssertions;
 using Microsoft.Build.Locator;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using mcpRoslyn.Options;
 using mcpRoslyn.Tests.TestHelpers;
@@ -181,6 +185,28 @@ public class GetCompilationErrorsToolTests
 
         GetCompilationErrorsTool.CountLoadFailures(failures).Should().Be(2,
             "Gone once, plus the failure that names no project; the reclassified and skipped kinds are not failures");
+    }
+
+    [Test]
+    public async Task Compiler_diagnostics_honour_the_projects_suppressors_without_includeAnalyzers()
+    {
+        // DIAG-003: EF Core's DiagnosticSuppressor hides CS8618 on DbSet<T> properties, but suppressors only
+        // run through CompilationWithAnalyzers, so the default pass reported errors the build doesn't have.
+        using var workspace = new AdhocWorkspace();
+        var project = workspace.AddProject("SuppressorTest", LanguageNames.CSharp)
+            .WithCompilationOptions(new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
+            .AddMetadataReference(MetadataReference.CreateFromFile(typeof(object).Assembly.Location))
+            .AddAnalyzerReference(new AnalyzerImageReference([new GetDocumentDiagnosticsToolTests.UnusedLocalSuppressor()]));
+        var document = project.AddDocument("Target.cs", SourceText.From("class Target { void M() { int unused = 0; } void N() { Missing(); } }"),
+            filePath: Path.GetFullPath("Target.cs"));
+        var tool = new GetCompilationErrorsTool(new DiagnosticTestWorkspace(document.Project.Solution),
+            NullLogger<GetCompilationErrorsTool>.Instance);
+
+        var r = await tool.InvokeAsync(severity: null, projectName: null, minimumSeverity: "All", ct: CancellationToken.None);
+
+        r.Error.Should().BeNull();
+        r.Result!.Diagnostics.Should().NotContain(d => d.Code == "CS0219", "the project's suppressor hides it, as the build would");
+        r.Result.Diagnostics.Should().Contain(d => d.Code == "CS0103", "diagnostics no suppressor claims are untouched");
     }
 
     [Test]

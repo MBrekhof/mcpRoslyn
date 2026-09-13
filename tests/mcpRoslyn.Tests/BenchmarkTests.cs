@@ -120,6 +120,10 @@ public class BenchmarkTests
         out_.WriteLine($"get_compilation_errors    compiler-only ms: [{string.Join(", ", slnCompiler)}] -> {slnCompilerCount} diagnostics");
         out_.WriteLine($"get_compilation_errors    with analyzers ms: [{string.Join(", ", slnAnalyzers)}] -> {slnAnalyzerCount} diagnostics");
         out_.WriteLine($"get_compilation_errors    median ratio analyzers/compiler: {(double)Median(slnAnalyzers) / Math.Max(1, Median(slnCompiler)):F1}x");
+
+        // DIAG-003: EF Core's suppressor must hide CS8618 on BPGDbContext's DbSets in the default pass.
+        var (dataMs, data) = await Time(() => slnTool.InvokeAsync(severity: "Error", projectName: "BPG.Data"));
+        out_.WriteLine($"get_compilation_errors    BPG.Data errors, default pass: {data.Result!.Diagnostics.Count} in {dataMs} ms");
     }
 
     private const string BpgLlmServiceFile = @"C:\Projects\BPG\src\BPG.LLM\Services\LLMService.cs";
