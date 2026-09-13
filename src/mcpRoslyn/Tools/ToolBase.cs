@@ -36,14 +36,38 @@ internal abstract class ToolBase(IWorkspaceService workspace, ILogger logger)
     protected IWorkspaceService Workspace => workspace;
     protected ILogger Log => logger;
 
+    /// <param name="reloadsWorkspace">The body itself replaces the workspace, so a reload during it is expected.</param>
     protected async Task<ToolResult<T>> ExecuteAsync<T>(
         Func<CancellationToken, Task<ToolResult<T>>> body,
-        CancellationToken ct) where T : class
+        CancellationToken ct,
+        bool reloadsWorkspace = false) where T : class
     {
+        var loadsBefore = workspace.LoadCount;
         var result = await ExecuteCoreAsync(body, ct);
         if (result.Error is not null) ToolCallOutcome.MarkFailed();
-        return result;
+
+        // Read after the body, so they reflect the refresh it made (WS-007). A reload landing mid-call publishes a
+        // clean generation while the answer came from the one it replaced, which is a reason of its own.
+        var stale = StaleReasons().ToList();
+        if (!reloadsWorkspace && workspace.LoadCount != loadsBefore)
+            stale.Add("the workspace was reloaded while this call ran, so the answer may predate the reload — repeat the call");
+        return stale.Count == 0 ? result : result with { Warnings = [StaleWarning(stale)] };
     }
+
+    private IReadOnlyList<string> StaleReasons()
+    {
+        try { return workspace.StaleReasons; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Checking the workspace for staleness failed"); // a caveat must not fail the answer
+            return [];
+        }
+    }
+
+    private static string StaleWarning(IReadOnlyList<string> reasons)
+        => $"The workspace may be stale: {string.Join("; ", reasons.Take(5))}"
+           + (reasons.Count > 5 ? $"; and {reasons.Count - 5} more" : "")
+           + ". Answers may miss these changes; call reload_workspace to load them.";
 
     private async Task<ToolResult<T>> ExecuteCoreAsync<T>(
         Func<CancellationToken, Task<ToolResult<T>>> body,

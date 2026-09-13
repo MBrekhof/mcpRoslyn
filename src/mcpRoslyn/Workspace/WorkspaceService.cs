@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.Extensions.Logging;
@@ -42,7 +43,196 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         public Exception? InvocationIndexFailure { get; set; }
         /// <summary>This load's MSBuild diagnostics; lock on the list itself.</summary>
         public List<WorkspaceLoadDiagnostic> Diagnostics { get; } = new();
+
+        /// <summary>Solution, project and Directory.* build files with their mtimes at load (WS-007).</summary>
+        public Dictionary<string, DateTime> BuildFileStamps { get; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>.cs files created or moved in since load; judged against the solution when read.</summary>
+        public ConcurrentDictionary<string, byte> AddedPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Documents whose file existed at load and was gone at the last complete refresh.</summary>
+        public volatile IReadOnlyList<string> MissingDocuments = [];
+        public List<FileSystemWatcher> Watchers { get; } = new();
+        public volatile bool WatcherFailed;
+
+        public void Dispose()
+        {
+            foreach (var watcher in Watchers) watcher.Dispose();
+            Workspace.Dispose();
+            Cts.Dispose();
+        }
     }
+
+    private static readonly string[] DirectoryBuildFiles =
+        ["Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props"];
+
+    /// <summary>
+    /// Why the loaded workspace may no longer match the disk (WS-007): a solution, project or Directory.*
+    /// build file changed, appeared or went away; a .cs file appeared in a project directory — an SDK-style
+    /// project picks those up without its .csproj changing; or a document's file was gone at the last refresh.
+    /// Document edits are not here: every call already refreshes those. Reported, not acted on: a reload
+    /// costs seconds of warm-up. ponytail: a generated or compile-excluded .cs file written outside bin/obj
+    /// reads as added until the next reload; excluding it would mean evaluating MSBuild's globs.
+    /// </summary>
+    public IReadOnlyList<string> StaleReasons
+    {
+        get
+        {
+            // ponytail: read without the gate — mid-publish this can pair a new generation with the previous
+            // solution for one call, which at worst adds or drops a warning once.
+            if (_current is not { } gen || _solution is not { } solution) return [];
+            var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(options.SolutionPath))!;
+            string Show(string path) => Path.GetRelativePath(solutionDirectory, path);
+
+            var reasons = new List<string>();
+            foreach (var (path, stamp) in gen.BuildFileStamps)
+            {
+                var now = LastWriteOrMissing(path);
+                if (now == stamp) continue;
+                reasons.Add(stamp == MissingFileTime ? $"{Show(path)} added"
+                    : now == MissingFileTime ? $"{Show(path)} deleted"
+                    : $"{Show(path)} changed");
+            }
+            reasons.AddRange(gen.MissingDocuments.Select(path => $"{Show(path)} deleted"));
+
+            if (!gen.AddedPaths.IsEmpty)
+            {
+                var documents = solution.Projects.SelectMany(p => p.Documents)
+                    .Select(d => d.FilePath).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+                // Judged now, not when the event fired: an editor saving through a temp file re-creates a file
+                // that is still a document, and a file added and removed again is nothing to report.
+                reasons.AddRange(gen.AddedPaths.Keys
+                    .Where(path => File.Exists(path) && !documents.Contains(path))
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .Select(path => $"{Show(path)} added"));
+            }
+
+            if (gen.WatcherFailed) reasons.Add("file watching failed, so added source files may be missed");
+            return reasons;
+        }
+    }
+
+    /// <summary>What <see cref="File.GetLastWriteTimeUtc"/> returns for a file that does not exist.</summary>
+    private static readonly DateTime MissingFileTime = DateTime.FromFileTimeUtc(0);
+
+    /// <summary>An unreadable path stamps as missing, the same at load and when compared.</summary>
+    private static DateTime LastWriteOrMissing(string path)
+    {
+        try { return File.GetLastWriteTimeUtc(path); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return MissingFileTime;
+        }
+    }
+
+    /// <summary>
+    /// Build output and tool folders below <paramref name="root"/> — only below it: the root itself may sit
+    /// inside a bin folder (the test fixtures do).
+    /// </summary>
+    private static bool IsIgnoredBelow(string root, string path)
+        => Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(s => s.Equals("bin", StringComparison.OrdinalIgnoreCase) || s.Equals("obj", StringComparison.OrdinalIgnoreCase)
+                      || s.Equals("node_modules", StringComparison.OrdinalIgnoreCase) || s.StartsWith('.'));
+
+    /// <summary>
+    /// Stamps the build files and watches the solution and project directories for added .cs files, for
+    /// <see cref="StaleReasons"/>. Deletions need no watcher: the per-call refresh checks every document's
+    /// file anyway, linked files outside these directories included. Never throws — a watcher that cannot
+    /// start marks the generation, it does not fail the load.
+    /// </summary>
+    private void TrackStaleness(Generation gen, Solution solution)
+    {
+        var solutionPath = Path.GetFullPath(options.SolutionPath);
+        var buildFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { solutionPath };
+        var directories = new List<string> { Path.GetDirectoryName(solutionPath)! };
+        foreach (var projectPath in solution.Projects.Select(p => p.FilePath).OfType<string>())
+        {
+            buildFiles.Add(Path.GetFullPath(projectPath));
+            var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath))!;
+            directories.Add(projectDirectory);
+            // MSBuild imports the nearest Directory.* file walking up to the root, so a missing one counts too.
+            for (var dir = new DirectoryInfo(projectDirectory); dir is not null; dir = dir.Parent)
+                foreach (var name in DirectoryBuildFiles) buildFiles.Add(Path.Combine(dir.FullName, name));
+        }
+        foreach (var path in buildFiles) gen.BuildFileStamps[path] = LastWriteOrMissing(path);
+
+        var roots = new List<string>();
+        foreach (var dir in directories.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(d => d.Length))
+            if (Directory.Exists(dir) && !roots.Any(root => IsUnder(dir, root))) roots.Add(dir);
+
+        foreach (var root in roots)
+        {
+            try
+            {
+                Watch(root, "*.cs", NotifyFilters.FileName, directories: false);
+                // A populated directory moved in raises one event for itself and none for the files inside it.
+                Watch(root, "*", NotifyFilters.DirectoryName, directories: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or PlatformNotSupportedException)
+            {
+                gen.WatcherFailed = true; // the workspace still serves; additions just can't be vouched for
+                log.LogWarning(ex, "Watching {Root} for added source files failed", root);
+            }
+        }
+
+        void Watch(string root, string filter, NotifyFilters notify, bool directories)
+        {
+            var watcher = new FileSystemWatcher(root, filter)
+            {
+                IncludeSubdirectories = true,
+                NotifyFilter = notify,
+                InternalBufferSize = 64 * 1024,
+            };
+            gen.Watchers.Add(watcher); // registered before it can raise or throw, so disposal always reaches it
+            watcher.Created += (_, e) => Note(root, e.FullPath, directories);
+            watcher.Renamed += (_, e) => Note(root, e.FullPath, directories);
+            watcher.Error += (_, _) => gen.WatcherFailed = true;
+            watcher.EnableRaisingEvents = true;
+        }
+
+        void Note(string root, string path, bool directory)
+        {
+            if (IsIgnoredBelow(root, path)) return;
+            if (!directory)
+            {
+                // A rename to an editor backup (Foo.cs~) is raised because its old name matched the filter.
+                if (path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) gen.AddedPaths.TryAdd(path, 0);
+                return;
+            }
+            // Walked by hand so ignored folders and junctions are pruned before descent (AllDirectories follows
+            // reparse points, loops included) and one unreadable subdirectory doesn't abandon its siblings.
+            // ponytail: on the watcher's thread, once per directory event — a directory created empty costs
+            // nothing; a huge tree moved in at once can overflow the buffer, which sets WatcherFailed.
+            var pending = new Stack<string>();
+            pending.Push(path);
+            while (pending.TryPop(out var dir))
+            {
+                try
+                {
+                    var attributes = File.GetAttributes(dir);
+                    if ((attributes & FileAttributes.ReparsePoint) != 0 || (attributes & FileAttributes.Directory) == 0) continue;
+                    foreach (var file in Directory.EnumerateFiles(dir, "*.cs"))
+                        if (file.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) gen.AddedPaths.TryAdd(file, 0);
+                    foreach (var child in Directory.EnumerateDirectories(dir))
+                        if (!IsIgnoredBelow(root, child)) pending.Push(child);
+                }
+                catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException
+                                           || (ex is IOException && !Directory.Exists(dir)))
+                {
+                    // moved, deleted or replaced by a file again: nothing was added from it
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    gen.WatcherFailed = true; // an unreadable directory may hold added files
+                }
+            }
+        }
+
+        static bool IsUnder(string dir, string root)
+            => dir.Equals(root, StringComparison.OrdinalIgnoreCase)
+               || dir.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private int _loadCount;
+    public int LoadCount => Volatile.Read(ref _loadCount);
 
     public int LoadedProjectCount => _solution?.Projects.Count() ?? 0;
     public Task WarmupTask => _current?.Warmup ?? Task.CompletedTask;
@@ -130,11 +320,19 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         if (_solution is null || _current is null) throw new InvalidOperationException("Workspace not loaded.");
 
         var changed = new List<DocumentId>();
+        var missing = new List<string>();
         try
         {
             foreach (var doc in _solution.Projects.SelectMany(p => p.Documents).ToList())
             {
-                if (doc.FilePath is null || !File.Exists(doc.FilePath)) continue;
+                if (doc.FilePath is null) continue;
+                if (!File.Exists(doc.FilePath))
+                {
+                    // Deleted since load (WS-007) — only if it existed then: a document generated at build time
+                    // may never have had a file.
+                    if (_mtimeCache.ContainsKey(doc.Id)) missing.Add(doc.FilePath);
+                    continue;
+                }
                 var diskMtime = File.GetLastWriteTimeUtc(doc.FilePath);
                 // Any different timestamp, not only a newer one: a file restored with its older time
                 // (a copy or unpack preserving times) is a change too (IDX-004).
@@ -160,6 +358,8 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
             }
         }
 
+        // Only after a complete pass: a partial one would drop deletions it never reached.
+        _current.MissingDocuments = missing.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         return _solution;
     }
 
@@ -251,29 +451,29 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         });
 
         Solution solution;
+        var mtimes = new Dictionary<DocumentId, DateTime>();
         try
         {
             solution = await gen.Workspace.OpenSolutionAsync(options.SolutionPath, cancellationToken: ct);
+            log.LogInformation("Loaded {ProjectCount} projects in {Elapsed} ms from {Path}",
+                solution.Projects.Count(), sw.ElapsedMilliseconds, options.SolutionPath);
+
+            // Has to happen here, not in the handler: diagnostics arrive during the load, before there
+            // is a project list to check them against (WS-004).
+            ReclassifyLoadedProjectDiagnostics(gen, solution);
+
+            foreach (var doc in solution.Projects.SelectMany(p => p.Documents))
+            {
+                if (doc.FilePath is null || !File.Exists(doc.FilePath)) continue;
+                mtimes[doc.Id] = File.GetLastWriteTimeUtc(doc.FilePath);
+            }
+            TrackStaleness(gen, solution);
         }
         catch
         {
             // Nothing was published: the previous generation, if any, keeps serving (WS-006).
-            gen.Workspace.Dispose();
-            gen.Cts.Dispose();
+            gen.Dispose();
             throw;
-        }
-        log.LogInformation("Loaded {ProjectCount} projects in {Elapsed} ms from {Path}",
-            solution.Projects.Count(), sw.ElapsedMilliseconds, options.SolutionPath);
-
-        // Has to happen here, not in the handler: diagnostics arrive during the load, before there
-        // is a project list to check them against (WS-004).
-        ReclassifyLoadedProjectDiagnostics(gen, solution);
-
-        var mtimes = new Dictionary<DocumentId, DateTime>();
-        foreach (var doc in solution.Projects.SelectMany(p => p.Documents))
-        {
-            if (doc.FilePath is null || !File.Exists(doc.FilePath)) continue;
-            mtimes[doc.Id] = File.GetLastWriteTimeUtc(doc.FilePath);
         }
 
         // Start warm-up before publishing, so a reader never sees the generation with a completed
@@ -282,6 +482,9 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         gen.Warmup = Task.Run(() => WarmupAsync(solution, gen));
 
         var retired = _current;
+        // Counted before the swap: a call that reads the new generation's reasons must also see the count move,
+        // or it could answer from the old generation with neither warning (WS-007).
+        Interlocked.Increment(ref _loadCount);
         _current = gen;
         _solution = solution;
         _mtimeCache = mtimes;
@@ -307,8 +510,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
             try { await Task.Delay(RetiredWorkspaceGrace, _disposeCts.Token); }
             catch (OperationCanceledException) { return; } // DisposeAsync took this generation over
             lock (_retiring) { if (!_retiring.Remove(gen)) return; }
-            gen.Workspace.Dispose();
-            gen.Cts.Dispose();
+            gen.Dispose();
         }
         catch (Exception ex)
         {
@@ -391,8 +593,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
                 gen.Cts.Cancel();
                 try { await gen.Warmup; }
                 catch (Exception) { /* cancelled or failed — it has stopped either way */ }
-                gen.Workspace.Dispose();
-                gen.Cts.Dispose();
+                gen.Dispose();
             }
         }
         finally { _gate.Release(); _gate.Dispose(); }

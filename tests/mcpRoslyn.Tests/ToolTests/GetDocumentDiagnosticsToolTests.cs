@@ -193,6 +193,8 @@ internal sealed class DiagnosticTestWorkspace(
     public int LoadedProjectCount => solution.ProjectIds.Count;
     public Task WarmupTask => Task.CompletedTask;
     public IReadOnlyList<mcpRoslyn.Contracts.WorkspaceLoadDiagnostic> Diagnostics => diagnostics ?? [];
+    public IReadOnlyList<string> StaleReasons => [];
+    public int LoadCount => 1;
     public SymbolIndex SymbolIndex => throw new NotSupportedException();
     public InvocationIndex InvocationIndex => throw new NotSupportedException();
     public Task<IndexedSolution> GetIndexedSolutionAsync(CancellationToken ct = default) => throw new NotSupportedException();

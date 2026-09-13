@@ -33,5 +33,5 @@ internal sealed class ReloadWorkspaceTool(IWorkspaceService ws, ILogger<ReloadWo
             if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
                 return ToolResult<ReloadResult>.OkSummary($"reloaded {result.ProjectCount} projects");
             return ToolResult<ReloadResult>.Ok(result);
-        }, ct);
+        }, ct, reloadsWorkspace: true);
 }

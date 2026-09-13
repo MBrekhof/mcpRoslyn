@@ -55,6 +55,10 @@ Findings are filtered against the things a reference scan can't see on its own: 
 | `ProjectLoadedWithWarnings` | It loaded fine; MSBuild grumbled about package pruning, a vulnerability advisory, etc. |
 | `SkippedUnsupportedProject` | Not a C#/VB project (`.esproj`, `.sqlproj`, …). Expected in a polyglot solution. |
 
+### Stale workspace warnings
+
+Edits to files already in the solution are picked up on every call. What needs `reload_workspace` — a `.cs` file added or deleted, a `.csproj`, `.sln` or `Directory.Build.props` changed — is detected and reported instead: every tool result then carries a `warnings` entry naming what changed, e.g. `The workspace may be stale: TestLib\AddedAfterLoad.cs added. Answers may miss these changes; call reload_workspace to load them.` An answer with that warning may be incomplete (a `find_references` blind to callers in the new file); reload before trusting it. mcpRoslyn does not reload on its own — a reload costs seconds of warm-up.
+
 ## Wiring into Claude Code
 
 mcpRoslyn supports two modes:

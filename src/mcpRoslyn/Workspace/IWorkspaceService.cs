@@ -36,6 +36,16 @@ public interface IWorkspaceService
     IReadOnlyList<WorkspaceLoadDiagnostic> Diagnostics { get; }
 
     /// <summary>
+    /// Why the loaded workspace may no longer match the disk — a solution, project or Directory.* build file
+    /// changed, or a .cs file was added or deleted — empty when it still matches. Every tool result carries
+    /// these as a warning; only <see cref="ReloadAsync"/> clears them (WS-007).
+    /// </summary>
+    IReadOnlyList<string> StaleReasons { get; }
+
+    /// <summary>How many workspace generations have been published; a change mid-call means a reload landed.</summary>
+    int LoadCount { get; }
+
+    /// <summary>
     /// The current generation's symbol index, which may still be building. Tools use
     /// <see cref="GetIndexedSolutionAsync"/>; this is for tests that have already awaited <see cref="WarmupTask"/>.
     /// Throws InvalidOperationException if accessed before LoadAsync completes.
