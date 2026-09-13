@@ -365,7 +365,9 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
 
   Fix (smallest honest version): await the warm-up with the request's CancellationToken in the indexed tools before querying, and return `INDEX_UNAVAILABLE` if the build faulted (needs a faulted flag — `WarmupAsync` swallows build exceptions, so `WarmupTask` itself completes successfully). Pairs with WS-006.
   Test: query before warm-up completes and assert the full result, not an empty one.
-- [ ] **TOOL-008: `rename_symbol` applyEdits can overwrite concurrent edits and leave a half-applied rename.** (ID: 1643)
+- [x] ~~**TOOL-008: `rename_symbol` applyEdits can overwrite concurrent edits and leave a half-applied rename.**~~ (ID: 1643)
+  Done 2026-09-13 (`10dc91b`). `applyEdits` opens every target exclusively (`FileShare.None`, brief retries for transient readers) and checks it through that handle before writing anything: `FILE_READ_ONLY`, `FILE_LOCKED`, `UNSUPPORTED_ENCODING` (text invalid in the encoding its BOM declares — a legacy code page would have been corrupted by replacement-character decoding), `STALE_FILE` (text differs from the snapshot, or the file was deleted; hint: `reload_workspace`), `LINKED_FILE_CONFLICT` (one file linked into several projects with differing renamed texts). Files are written back through the same handles in their detected encoding (UTF-8, UTF-16 LE/BE, UTF-32 LE/BE BOMs kept). The write phase is not cancellable and has no rollback; an IO failure mid-apply returns `PARTIAL_WRITE` naming what was written. A process-wide lock serialises renames, released even if handle disposal fails. Four Codex review rounds.
+
   From the 2026-09-12 Codex review (findings 1, 2), verified against the code. Codex rated it high; for a single-user server the race window is narrow, so medium — but the failure mode is lost work.
 
   `RenameSymbolTool.cs:84-91` writes each changed file's *entire* text from the snapshot taken by `GetFreshSolutionAsync` at the start of the call. No lock spans compute → write, and nothing checks the file is still the version that was renamed:
