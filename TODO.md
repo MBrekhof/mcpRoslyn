@@ -1,6 +1,6 @@
 # TODO — mcpRoslyn
 
-v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md)). v1.1 warm-up shipped (see [`docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`](docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md)). v1.3 feature-expansion shipped to main (111 tests). v1.3 acceptance follow-ups: #1/#2/#3/#4 all closed. Only open issue is [#5](https://github.com/MBrekhof/mcpRoslyn/issues/5) (SymbolIndex warm-up ~7.2 s).
+v1 is shipped and accepted (see [`docs/acceptance/2026-05-15-v1-acceptance.md`](docs/acceptance/2026-05-15-v1-acceptance.md)). v1.1 warm-up shipped (see [`docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md`](docs/acceptance/2026-05-16-v1.1-warmup-acceptance.md)). v1.3 feature-expansion shipped to main. v1.3 acceptance follow-ups #1–#4 are closed, and [#5](https://github.com/MBrekhof/mcpRoslyn/issues/5) (SymbolIndex warm-up) was closed by PERF-001. Every card from the 2026-09-12 Codex review is done; what remains open is deferred or blocked on VAL-001.
 
 **ContextBoard sync:** open items cite their card as `(ID: nnnn)` on the checkbox line, with the detail on **indented lines beneath**. That indentation is load-bearing — the checkbox line is treated as a board-owned title and is discarded, while the indented block becomes the card body. A cited one-liner with no indented block syncs an *empty* body and wipes whatever the card had.
 
@@ -307,7 +307,9 @@ rebuilding NDepend badly.
 
 ## Spotted in real-session use (Electron.NET, 2026-09-01)
 
-- [ ] **WS-005: Allow selecting which solution to load — workspace pinned to one sln misses sibling projects.** (ID: 1451)
+- [x] ~~**WS-005: Allow selecting which solution to load — workspace pinned to one sln misses sibling projects.**~~ (ID: 1451)
+  Done 2026-09-13 (`cf3b81c`). Both asks. (b) Startup: within one directory, discovery ranks solutions by the C#/VB projects they declare — whole-line `.sln` declarations matched by shape (GUIDs validated, solution folders excluded by type GUID), `.slnx` `Project` paths by extension; folders, malformed lines and `.esproj`/`.sqlproj` don't count — then `.sln` before `.slnx`, then name, so ElectronNET.sln beats ElectronNET.Lean.sln. Narrowed from "transitively covers the most projects" to declared projects on purpose (following references isn't worth a parser); the chosen path is reported by `project_overview` and the startup log. The upward-first rule is unchanged: an enclosing solution still wins over nested ones. (a) Mid-session: `reload_workspace(solutionPath)` switches to the full path of an existing `.sln`/`.slnx` (`SOLUTION_NOT_FOUND` otherwise, checked before any load, the current solution left serving); without it the served solution is re-evaluated. The result's path, project count and diagnostics are read under the reload's own gate, so overlapping reloads can't mix two solutions. Acceptance on the Electron.NET repo itself not run (needs the published exe republished). Five Codex review rounds (three on discovery, two on the switch).
+
   Observed 2026-09-01 in an Electron.NET session (repo C:\Projects\Electron.NET). The repo has three solutions: `src/ElectronNET.Lean.sln` (4 library projects), `src/ElectronNET.sln` (full: + IntegrationTests, WebApp, ConsoleApp, samples), and a standalone sample sln. The server auto-loaded the Lean sln, so every symbol query (workspace_symbol, find_references, ...) was blind to the test and app projects for the whole session.
 
   Verified there is no escape hatch: `reload_workspace` takes no parameters — it re-evaluates the already-chosen solution. Which sln gets picked at startup is not controllable per session.
