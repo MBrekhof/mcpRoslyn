@@ -112,7 +112,7 @@ internal sealed class FindRegistrationsTool(IWorkspaceService ws, ILogger<FindRe
             return Contracts.ToolResult<FindRegistrationsResult>.Ok(result);
         }, ct);
 
-    private static IEnumerable<DiConsumer> FindConsumers(
+    internal static IEnumerable<DiConsumer> FindConsumers(
         string serviceType, Microsoft.CodeAnalysis.Solution solution, SymbolIndex symbolIndex)
     {
         // SymbolIndex.QueryParameterType returns SymbolInfo for methods whose parameter type matches.
@@ -132,7 +132,9 @@ internal sealed class FindRegistrationsTool(IWorkspaceService ws, ILogger<FindRe
             // Roslyn names instance constructors ".ctor" and static ones ".cctor"; both come
             // back as Kind "Method", so the name is the discriminator.
             if (m.Name is not ".ctor") continue;
-            if (m.ContainingType is null || !seen.Add(m.ContainingType)) continue;
+            // Keyed by declaring file too: same-named types in two projects are two consumers, and dropping one would
+            // let find_dead_code_candidates call a registration's consumers all dead while a live namesake remains.
+            if (m.ContainingType is null || !seen.Add($"{m.ContainingType}|{m.PrimaryLocation?.FilePath}")) continue;
             yield return new DiConsumer(m.ContainingType, m.PrimaryLocation);
         }
     }

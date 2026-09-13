@@ -1,19 +1,24 @@
 using System.ComponentModel;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.FindSymbols;
+using Microsoft.CodeAnalysis.Text;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
 using mcpRoslyn.Workspace;
 
 namespace mcpRoslyn.Tools;
 
+/// <param name="KeptAliveBy">For reason "only-referenced-by-dead-code": the dead declarations every reference sits in
+/// (TOOL-013). Null otherwise.</param>
 public sealed record DeadCodeCandidate(
     string Symbol,
     string Kind,
     string Accessibility,
     Contracts.SymbolLocation? Location,
     string Confidence,    // "high" | "medium"
-    string Reason);
+    string Reason,
+    IReadOnlyList<string>? KeptAliveBy = null);
 
 public sealed record DeadCodeSkipped(
     int PublicMembers,
@@ -22,11 +27,22 @@ public sealed record DeadCodeSkipped(
     int DiRegistered = 0,
     int FrameworkReached = 0);
 
+/// <summary>A DI registration whose observed constructor consumers are all dead-code candidates (TOOL-013).</summary>
+public sealed record RegistrationWithOnlyDeadConsumers(
+    string ServiceType,
+    string? ImplType,
+    Contracts.SymbolLocation Registration,
+    IReadOnlyList<string> Consumers);
+
+/// <param name="RegistrationsWithOnlyDeadConsumers">With includePublicTypes: registrations whose every observed
+/// constructor consumer is a candidate. Evidence, not a verdict: a service can also be resolved through
+/// GetRequiredService, IEnumerable&lt;T&gt; injection or minimal-API parameters. Null without includePublicTypes.</param>
 public sealed record FindDeadCodeResult(
     IReadOnlyList<DeadCodeCandidate> Candidates,
     IReadOnlyList<string> ProjectsScanned,
     DeadCodeSkipped Skipped,
-    bool Truncated = false);
+    bool Truncated = false,
+    IReadOnlyList<RegistrationWithOnlyDeadConsumers>? RegistrationsWithOnlyDeadConsumers = null);
 
 [McpServerToolType]
 internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<FindDeadCodeCandidatesTool> log)
@@ -46,7 +62,7 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
         { "Dispose", "DisposeAsync", "ToString", "Equals", "GetHashCode" };
 
     [McpServerTool(Name = "find_dead_code_candidates")]
-    [Description("Returns members with no references: private/internal by default, plus unreferenced public types when includePublicTypes is set. Skips attributed members ([Fact]/[Test]/[JsonConstructor]/…) and framework contracts (Dispose/Equals/…). Public types that are DI-registered or framework-reached (Controller/Hub/extension classes) are suppressed. Marks internal members as medium-confidence when [InternalsVisibleTo] applies.")]
+    [Description("Returns members with no references: private/internal by default, plus unreferenced public types when includePublicTypes is set. Skips attributed members ([Fact]/[Test]/[JsonConstructor]/…) and framework contracts (Dispose/Equals/…). Public types that are DI-registered or framework-reached (Controller/Hub/extension classes) are suppressed. Marks internal members as medium-confidence when [InternalsVisibleTo] applies. Symbols referenced only from other candidates are reported too, at medium confidence with reason only-referenced-by-dead-code and keptAliveBy naming that dead code. With includePublicTypes, registrationsWithOnlyDeadConsumers lists DI registrations whose every constructor consumer is a candidate: evidence to check, not a verdict.")]
     public Task<Contracts.ToolResult<FindDeadCodeResult>> InvokeAsync(
         bool includePrivateMembers = true,
         bool includeInternalTypes = true,
@@ -77,8 +93,9 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
             var registered = includePublicTypes ? RegistrationLookup.Build(ready.InvocationIndex) : null;
 
             int publicSkip = 0, testSkip = 0, denySkip = 0, diSkip = 0, frameworkSkip = 0;
-            var truncated = false;
             var candidates = new List<DeadCodeCandidate>();
+            var deadDeclarations = new List<DeadDeclaration>();
+            var stillReferenced = new List<ReferencedSymbol>();
 
             foreach (var (entry, declaringDocs) in indexed)
             {
@@ -130,29 +147,30 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
                     if (isInternalLevel && !includeInternalTypes) continue;
                 }
 
-                // The runtime calls the entry point; nothing in source ever references it (TOOL-012).
-                if (await IsEntryPointAsync(copies, solution, ct2)) { frameworkSkip++; continue; }
+                // The runtime calls these, so nothing in source ever references them: the entry point (TOOL-012), static
+                // constructors and finalizers. They are neither dead nor roots for the chain pass below (TOOL-013).
+                if (copies.Any(c => c is IMethodSymbol { MethodKind: MethodKind.StaticConstructor or MethodKind.Destructor })
+                    || await IsEntryPointAsync(copies, solution, ct2)) { frameworkSkip++; continue; }
                 if (copies.Any(IsDenylisted)) { denySkip++; continue; }
 
-                // Everything above is cheap; the reference scan is not. Once the result set is full
-                // we keep classifying so the Skipped counters stay accurate, and stop paying for
-                // scans whose result we could not report anyway (TOOL-003).
-                if (candidates.Count >= maxResults) { truncated = true; continue; }
-
-                // Reference scan. For a public type, references from inside its own declaration
-                // (a static factory naming itself, a nested helper) are not evidence that anything
-                // else uses it.
-                // A linked declaration is dead only if no assembly compiling it uses its copy.
-                var referenced = false;
+                // Reference scan, for every eligible symbol. The chain pass below needs each one's references, and a
+                // symbol left unscanned could only count as unknown, never as dead, so this no longer stops once
+                // maxResults is reached (TOOL-013 replaces TOOL-003's early stop; the cap applies at the end). For a
+                // public type, references from inside its own declaration (a static factory naming itself, a nested
+                // helper) are not evidence that anything else uses it. A linked declaration is dead only if no
+                // assembly compiling it uses its copy, so every copy's references count.
+                var references = new List<Location>();
                 foreach (var copy in copies)
                 {
                     var refs = await SymbolFinder.FindReferencesAsync(copy, solution, ct2);
-                    referenced = isPublicSurface
-                        ? refs.Any(r => r.Locations.Any(l => !IsInsideOwnDeclaration(copy, l.Location)))
-                        : refs.Any(r => r.Locations.Any());
-                    if (referenced) break;
+                    references.AddRange(refs.SelectMany(r => r.Locations).Select(l => l.Location)
+                        .Where(l => !isPublicSurface || !IsInsideOwnDeclaration(copy, l)));
                 }
-                if (referenced) continue;
+                if (references.Count > 0)
+                {
+                    stillReferenced.Add(new ReferencedSymbol(entry.Info.Signature, symbol, copies, loc, references));
+                    continue;
+                }
 
                 var confidence = isPublicSurface || copies.Any(c => ComputeConfidence(c, solution) != "high")
                     ? "medium"
@@ -167,13 +185,74 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
                     Location: loc,
                     Confidence: confidence,
                     Reason: reason));
+                deadDeclarations.AddRange(DeclarationsOf(copies, entry.Info.Signature));
             }
+
+            // TOOL-013: to a fixed point, a symbol whose every reference sits inside an already-dead declaration is dead
+            // too. Medium confidence, since one wrongly-dead root takes its whole chain with it; KeptAliveBy names
+            // the dead code holding each reference so that root can be checked. A reference outside source (or in a
+            // symbol that was never eligible, like a public member) keeps it alive.
+            for (var changed = true; changed;)
+            {
+                changed = false;
+                for (var i = stillReferenced.Count - 1; i >= 0; i--)
+                {
+                    var pending = stillReferenced[i];
+                    var keepers = new SortedSet<string>(StringComparer.Ordinal);
+                    var onlyFromDeadCode = true;
+                    foreach (var reference in pending.References)
+                    {
+                        if (InnermostDeadDeclaration(reference, deadDeclarations) is not { } keeper) { onlyFromDeadCode = false; break; }
+                        keepers.Add(keeper);
+                    }
+                    if (!onlyFromDeadCode) continue;
+
+                    candidates.Add(new DeadCodeCandidate(
+                        Symbol: pending.Signature,
+                        Kind: pending.Symbol.Kind.ToString(),
+                        Accessibility: pending.Symbol.DeclaredAccessibility.ToString(),
+                        Location: pending.Location,
+                        Confidence: "medium",
+                        Reason: "only-referenced-by-dead-code",
+                        KeptAliveBy: keepers.ToArray()));
+                    deadDeclarations.AddRange(DeclarationsOf(pending.Copies, pending.Signature));
+                    stillReferenced.RemoveAt(i);
+                    changed = true;
+                }
+            }
+
+            // TOOL-013: registrations whose every observed constructor consumer is a candidate. Evidence, not a verdict,
+            // so they are listed apart from the candidates: GetRequiredService<T>, IEnumerable<T> injection or a
+            // minimal-API parameter resolve a service with no constructor consumer. A registration with no observed
+            // consumer at all is not listed, since that proves nothing either way.
+            IReadOnlyList<RegistrationWithOnlyDeadConsumers>? onlyDeadConsumers = null;
+            if (includePublicTypes)
+            {
+                // Keyed by name and declaring file, so a live same-named type in another project can't pass for the dead
+                // one. A consumer whose constructor sits in another file of a partial type is never matched: the safe way.
+                var dead = candidates.Select(c => (c.Symbol, c.Location?.FilePath)).ToHashSet();
+                onlyDeadConsumers = ready.InvocationIndex.QueryDi().Registrations
+                    .Where(r => r.ServiceType is not null)
+                    .Select(r => (Registration: r, Consumers: FindRegistrationsTool
+                        .FindConsumers(r.ServiceType!, solution, ready.SymbolIndex).ToArray()))
+                    .Where(x => x.Consumers.Length > 0
+                                && x.Consumers.All(c => dead.Contains((c.Type, c.CtorLocation?.FilePath))))
+                    .Select(x => new RegistrationWithOnlyDeadConsumers(
+                        x.Registration.ServiceType!, x.Registration.ImplType, x.Registration.Location,
+                        x.Consumers.Select(c => c.Type).ToArray()))
+                    .ToArray();
+            }
+
+            // The cap applies to the finished analysis, so a capped result is a prefix of the full one.
+            var truncated = candidates.Count > maxResults;
+            if (truncated) candidates = candidates.Take(maxResults).ToList();
 
             var result = new FindDeadCodeResult(
                 Candidates: candidates,
                 ProjectsScanned: solution.Projects.Select(p => p.Name).ToArray(),
                 Skipped: new DeadCodeSkipped(publicSkip, testSkip, denySkip, diSkip, frameworkSkip),
-                Truncated: truncated);
+                Truncated: truncated,
+                RegistrationsWithOnlyDeadConsumers: onlyDeadConsumers);
             if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
             {
                 var highCount = result.Candidates.Count(c => string.Equals(c.Confidence, "high", StringComparison.OrdinalIgnoreCase));
@@ -203,6 +282,53 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
     /// True when <paramref name="location"/> falls inside one of the symbol's own declarations.
     /// Span-level, not file-level: two types declared in one file don't mask each other.
     /// </summary>
+    private sealed record DeadDeclaration(SyntaxTree Tree, TextSpan Span, string Symbol);
+
+    private sealed record ReferencedSymbol(
+        string Signature, ISymbol Symbol, IReadOnlyList<ISymbol> Copies, Contracts.SymbolLocation Location,
+        IReadOnlyList<Location> References);
+
+    private static IEnumerable<DeadDeclaration> DeclarationsOf(IEnumerable<ISymbol> copies, string signature)
+        => copies.SelectMany(PartsOf).SelectMany(s => s.DeclaringSyntaxReferences)
+            .Select(d => new DeadDeclaration(d.SyntaxTree, CoveredSpan(d.GetSyntax()), signature));
+
+    /// <summary>A partial method's body lives in its implementation part, and either part can be the one resolved.</summary>
+    private static IEnumerable<ISymbol> PartsOf(ISymbol symbol) => symbol is IMethodSymbol method
+        ? new ISymbol?[] { method, method.PartialDefinitionPart, method.PartialImplementationPart }
+            .OfType<ISymbol>().Distinct(SymbolEqualityComparer.Default)
+        : [symbol];
+
+    /// <summary>
+    /// The part of a declaration that dies with its symbol. A field's declaring syntax is only its declarator: when it is
+    /// the declaration's sole variable, the type before it belongs to it too, while with siblings (<c>DeadType a, b;</c>)
+    /// the shared type stays out so a live sibling still keeps it alive. An initializer never belongs to it: it runs
+    /// whenever the type or instance initializes, whether or not the field or property is ever read.
+    /// </summary>
+    private static TextSpan CoveredSpan(SyntaxNode node) => node switch
+    {
+        VariableDeclaratorSyntax { Parent: VariableDeclarationSyntax { Variables.Count: 1, Parent: BaseFieldDeclarationSyntax field } } declarator
+            => TextSpan.FromBounds(field.SpanStart, declarator.Initializer is null ? field.Span.End : declarator.Identifier.Span.End),
+        VariableDeclaratorSyntax { Initializer: not null } declarator => declarator.Identifier.Span,
+        PropertyDeclarationSyntax { Initializer: not null } property => TextSpan.FromBounds(property.SpanStart, property.Initializer.SpanStart),
+        _ => node.Span,
+    };
+
+    /// <summary>
+    /// The innermost dead declaration containing <paramref name="reference"/> (a dead method rather than the dead type
+    /// around it), or null when the reference is outside dead code or outside source.
+    /// </summary>
+    private static string? InnermostDeadDeclaration(Location reference, List<DeadDeclaration> dead)
+    {
+        if (!reference.IsInSource) return null;
+        DeadDeclaration? innermost = null;
+        foreach (var declaration in dead)
+        {
+            if (declaration.Tree != reference.SourceTree || !declaration.Span.Contains(reference.SourceSpan)) continue;
+            if (innermost is null || declaration.Span.Length < innermost.Span.Length) innermost = declaration;
+        }
+        return innermost?.Symbol;
+    }
+
     private static bool IsInsideOwnDeclaration(ISymbol symbol, Location location)
         => symbol.DeclaringSyntaxReferences.Any(d =>
             d.SyntaxTree == location.SourceTree && d.Span.Contains(location.SourceSpan));

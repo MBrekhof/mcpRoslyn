@@ -28,8 +28,12 @@ public sealed class FindDeadCodeCandidatesToolTests
 
         r.Error.Should().BeNull();
         r.Result!.Candidates.Where(c => c.Symbol.EndsWith("Shared.Dup")).Should().HaveCount(2);
-        r.Result.Candidates.Should().NotContain(c => c.Symbol.EndsWith("Shared.Linked"),
-            "a linked declaration is dead only if no assembly compiling it uses it, and TestWeb's copy is used");
+        // A linked declaration is dead on its own only if no assembly compiling it uses it, and TestWeb's copy is used.
+        // Its one user, FakeMapperUsage, is itself unreferenced fixture code, so TOOL-013 reports it as a chain.
+        var linked = r.Result.Candidates.Where(c => c.Symbol.EndsWith("Shared.Linked")).Should().ContainSingle().Which;
+        linked.Reason.Should().Be("only-referenced-by-dead-code",
+            "TestWeb's copy is used, so the declaration is not dead on its own");
+        linked.KeptAliveBy.Should().ContainSingle(k => k.EndsWith("FakeMapperUsage"));
         r.Result.Candidates.Where(c => c.Symbol.EndsWith("Shared.LinkedUnused")).Should().ContainSingle(
             "an unused linked declaration is one candidate, not one per assembly and not none");
         r.Result.Candidates.Should().NotContain(c => c.Symbol.EndsWith("Shared.LinkedExtensions"),
@@ -116,6 +120,95 @@ public sealed class FindDeadCodeCandidatesToolTests
         // compilations and SymbolIndex holds an entry for each. Every one used to be reported.
         r.Result!.Candidates.Select(c => $"{c.Symbol}|{c.Location?.FilePath}")
             .Should().OnlyHaveUniqueItems();
+    }
+
+    [Test]
+    public async Task Code_referenced_only_from_dead_code_is_reported_with_the_dead_code_keeping_it()
+    {
+        // TOOL-013: DeadEntry is unreferenced; OnlyFromDead is called only from DeadEntry, so it is dead too, while
+        // Shared is also called from the public (never-candidate) Live and must stay out.
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var r = await host.Tool.InvokeAsync(maxResults: 1000);
+
+        r.Error.Should().BeNull();
+        r.Result!.Candidates.Should().Contain(c => c.Symbol.Contains("DeadChain.DeadEntry") && c.Reason == "no-references");
+        var chained = r.Result.Candidates.Should().ContainSingle(c => c.Symbol.Contains("DeadChain.OnlyFromDead(")).Which;
+        chained.Reason.Should().Be("only-referenced-by-dead-code");
+        chained.Confidence.Should().Be("medium", "one wrongly-dead root would take its whole chain with it");
+        chained.KeptAliveBy.Should().ContainSingle(k => k.Contains("DeadChain.DeadEntry"));
+        r.Result.Candidates.Should().NotContain(c => c.Symbol.Contains("DeadChain.Shared"));
+    }
+
+    [TestCase("TestLib.FieldOnlyType", TestName = "type named only in a dead field's declaration")]
+    [TestCase("TestLib.DeadChain.OnlyFromDeadPartial", TestName = "helper called only from a dead partial method's body")]
+    public async Task Dead_declarations_cover_everything_they_contain(string symbol)
+    {
+        // TOOL-013 review: a field's declaring syntax is just its declarator (not the type before it), and a partial
+        // method's resolved symbol is its body-less definition part, so references inside either were missed.
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var r = await host.Tool.InvokeAsync(maxResults: 1000);
+
+        r.Error.Should().BeNull();
+        r.Result!.Candidates.Should().Contain(c => c.Symbol.StartsWith(symbol) && c.Reason == "only-referenced-by-dead-code");
+    }
+
+    [Test]
+    public async Task An_unused_fields_initializer_still_keeps_what_it_calls_alive()
+    {
+        // TOOL-013 review: the field is dead storage, but its initializer runs whenever the type initializes.
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var r = await host.Tool.InvokeAsync(maxResults: 1000);
+
+        r.Error.Should().BeNull();
+        r.Result!.Candidates.Should().Contain(c => c.Symbol.Contains("DeadChain.UnusedInitialized"));
+        r.Result.Candidates.Should().NotContain(c => c.Symbol.Contains("DeadChain.RunsDuringTypeInit"));
+    }
+
+    [Test]
+    public async Task A_static_constructor_is_runtime_invoked_and_keeps_what_it_calls_alive()
+    {
+        // TOOL-013 review: an explicit static constructor has no source references, so it was reported as dead and,
+        // as a chain root, took every helper it calls with it.
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var r = await host.Tool.InvokeAsync(maxResults: 1000);
+
+        r.Error.Should().BeNull();
+        r.Result!.Candidates.Should().NotContain(c => c.Kind == "Method" && c.Symbol.Contains("DeadChain.DeadChain("));
+        r.Result.Candidates.Should().NotContain(c => c.Symbol.Contains("DeadChain.RunsInStaticConstructor"));
+    }
+
+    [Test]
+    public async Task Registration_whose_only_consumers_are_dead_is_listed_as_evidence()
+    {
+        // TOOL-013: IBaz is registered and its only constructor consumer, OrphanConsumer, is unreferenced. That is
+        // evidence the registration is dead, not a verdict, so it is listed apart from the candidates.
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var r = await host.Tool.InvokeAsync(includePublicTypes: true, maxResults: 1000);
+
+        r.Error.Should().BeNull();
+        r.Result!.Candidates.Should().Contain(c => c.Symbol.EndsWith("OrphanConsumer"));
+        var evidence = r.Result.RegistrationsWithOnlyDeadConsumers.Should().ContainSingle(e => e.ServiceType.EndsWith("IBaz")).Which;
+        evidence.Consumers.Should().ContainSingle(c => c.EndsWith("OrphanConsumer"));
+        r.Result.RegistrationsWithOnlyDeadConsumers.Should().NotContain(e => e.ServiceType.EndsWith("IFoo"),
+            "BarController consumes IFoo and is framework-reached");
+        r.Result.RegistrationsWithOnlyDeadConsumers.Should().NotContain(e => e.ServiceType.EndsWith("IBar"),
+            "no observed consumer is not the same as only dead ones");
+    }
+
+    [Test]
+    public async Task Chains_are_complete_before_maxResults_caps_the_output()
+    {
+        // TOOL-013 design: an unscanned symbol must stay unknown, never dead, so analysis runs to the fixed point
+        // and only then is the output capped.
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var full = await host.Tool.InvokeAsync(maxResults: 1000);
+        var capped = await host.Tool.InvokeAsync(maxResults: full.Result!.Candidates.Count - 1);
+
+        capped.Result!.Truncated.Should().BeTrue();
+        // Compared by identity, not record equality: KeptAliveBy is a fresh array on every call.
+        static string Key(DeadCodeCandidate c) => $"{c.Symbol}|{c.Location?.FilePath}|{c.Reason}";
+        capped.Result.Candidates.Select(Key).Should().Equal(full.Result.Candidates.Take(full.Result.Candidates.Count - 1).Select(Key),
+            "a capped result is a prefix of the full answer, never a different answer");
     }
 
     [Test]
