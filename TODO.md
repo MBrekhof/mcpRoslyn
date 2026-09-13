@@ -475,7 +475,9 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
 
   roslynk (Morris.Roslynk.Mcp) `get_diagnostics includeAnalyzers:false` has the identical behaviour, so this is a shared Roslyn-API trap, not an mcpRoslyn-only regression.
 
-- [ ] **TOOL-012: find_dead_code_candidates reports the program entry point as dead, at high confidence** (ID: 1678) — Todo, bug
+- [x] ~~**TOOL-012: find_dead_code_candidates reports the program entry point as dead, at high confidence**~~ (ID: 1678)
+  Done 2026-09-13 (`4f02b17`). Any method its compilation names as the entry point (`Compilation.GetEntryPoint`) is skipped and counted under `frameworkReached`. That covers top-level statements and a classic `static Main`; a `Main` the compiler ignores is still judged normally. Regression test `Program_entry_point_is_never_a_candidate` failed before the fix. There is no separate classic-`Main` fixture, because `GetEntryPoint` covers that shape by construction. Codex review found nothing.
+
   Found 2026-09-13 in VAL-001 (both BPG runs; `docs/acceptance/2026-09-13-val-001-bpg-session.md`).
 
   `find_dead_code_candidates includePublicTypes:true` on BPG returns `<top-level-statements-entry-point>` (`Program.cs:1-432`): kind Method, Private, confidence **high**, reason `no-references`. It survives every filter in `FindDeadCodeCandidatesTool.cs`. It is private, so the public-type branch that already exempts `*Program` via `IsFrameworkReached` never runs (`:109-131`). And `IsDenylisted` only skips `IsImplicitlyDeclared` symbols (`:272`), which the synthesized top-level entry point evidently isn't.
