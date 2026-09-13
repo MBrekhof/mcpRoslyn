@@ -46,18 +46,29 @@ public sealed class InvocationIndex
     private readonly List<DiEntry> _registrations = new();
     private readonly List<DiEntry> _unclassified = new();
     private readonly HashSet<DocumentId> _dirty = new();
-    private readonly object _gate = new();
+    private readonly object _gate = new();        // guards the collections above and _solution
+    private readonly object _refreshGate = new(); // one refresh at a time
 
     private static readonly HashSet<string> RouteMethods = new(StringComparer.Ordinal)
         { "MapGet", "MapPost", "MapPut", "MapDelete", "MapPatch", "MapMethods", "Map" };
     private static readonly HashSet<string> DiMethods = new(StringComparer.Ordinal)
         { "AddSingleton", "AddTransient", "AddScoped" };
 
-    private Solution? _solution;
+    private Solution? _solution; // holds the dirty documents' current text
+
+    /// <summary>Entries collected without the lock and published in one step.</summary>
+    private sealed class DocEntries
+    {
+        public readonly List<RouteEntry> Routes = new();
+        public readonly List<MiddlewareEntry> Middleware = new();
+        public readonly List<HostedServiceEntry> HostedServices = new();
+        public readonly List<DiEntry> Registrations = new();
+        public readonly List<DiEntry> Unclassified = new();
+    }
 
     public async Task BuildAsync(Solution solution, CancellationToken ct = default)
     {
-        _solution = solution;
+        lock (_gate) _solution ??= solution; // an Invalidate during warm-up already holds a newer one
         var tasks = solution.Projects.Select(async project =>
         {
             var compilation = await project.GetCompilationAsync(ct);
@@ -68,28 +79,25 @@ public sealed class InvocationIndex
                 ct.ThrowIfCancellationRequested();
                 var tree = await doc.GetSyntaxTreeAsync(ct);
                 if (tree is null) continue;
-                var semantic = compilation.GetSemanticModel(tree);
-                IndexDocument(doc.Id, tree, semantic);
+                var entries = new DocEntries();
+                IndexDocument(doc.Id, tree, compilation.GetSemanticModel(tree), entries);
+                lock (_gate) Publish(entries);
             }
         });
         await Task.WhenAll(tasks);
     }
 
-    public void MarkDirty(DocumentId documentId)
-    {
-        lock (_gate) _dirty.Add(documentId);
-    }
-
     /// <summary>
-    /// Updates the current solution snapshot used by dirty re-walks.
-    /// Called by WorkspaceService whenever it refreshes the solution.
+    /// Records changed documents together with the solution holding their new text, in one step, so a
+    /// refresh never pairs a dirty marker with a solution that predates it.
     /// </summary>
-    public void UpdateSolution(Solution solution)
+    public void Invalidate(IEnumerable<DocumentId> changed, Solution solution)
     {
-        // No lock needed — _solution is only read inside RefreshDirty which
-        // is called from the public Query* methods; the assignment is atomic
-        // (reference write on 64-bit CLR).
-        _solution = solution;
+        lock (_gate)
+        {
+            _dirty.UnionWith(changed);
+            _solution = solution;
+        }
     }
 
     public IReadOnlyList<RouteEntry> QueryRoutes()
@@ -129,44 +137,65 @@ public sealed class InvocationIndex
         }
     }
 
-    // -------- Dirty re-walk (idempotent: removes existing entries for the doc, re-indexes the doc) --------
+    // -------- Dirty re-walk --------
 
+    /// <summary>
+    /// Re-indexes the changed documents into locals, then swaps them in under the lock: a concurrent
+    /// query sees the old entries or the new ones, never neither, and a re-bind that throws leaves the
+    /// old entries and the markers in place (IDX-004). Markers are cleared only if no newer solution
+    /// arrived during the walk; otherwise the next query walks again.
+    /// ponytail: synchronous re-bind — the query API is synchronous; make it async if a caller needs to.
+    /// </summary>
     private void RefreshDirty()
     {
-        HashSet<DocumentId> dirtySnapshot;
-        lock (_gate)
+        lock (_refreshGate)
         {
-            if (_dirty.Count == 0 || _solution is null) return;
-            dirtySnapshot = new HashSet<DocumentId>(_dirty);
-            _dirty.Clear();
-        }
-
-        foreach (var docId in dirtySnapshot)
-        {
-            // Remove any existing entries for this doc across all buckets
+            HashSet<DocumentId> dirty;
+            Solution solution;
             lock (_gate)
             {
-                _routes.RemoveAll(e => e.DocumentId == docId);
-                _middleware.RemoveAll(e => e.DocumentId == docId);
-                _hostedServices.RemoveAll(e => e.DocumentId == docId);
-                _registrations.RemoveAll(e => e.DocumentId == docId);
-                _unclassified.RemoveAll(e => e.DocumentId == docId);
+                if (_dirty.Count == 0 || _solution is null) return;
+                dirty = new HashSet<DocumentId>(_dirty);
+                solution = _solution;
             }
 
-            var doc = _solution!.GetDocument(docId);
-            if (doc is null) continue;
-            var tree = doc.GetSyntaxTreeAsync().GetAwaiter().GetResult();
-            if (tree is null) continue;
-            var sem = doc.GetSemanticModelAsync().GetAwaiter().GetResult();
-            if (sem is null) continue;
+            var fresh = new DocEntries();
+            foreach (var docId in dirty)
+            {
+                var doc = solution.GetDocument(docId);
+                if (doc is null) continue; // gone from the solution: its entries simply go
+                var tree = doc.GetSyntaxTreeAsync().GetAwaiter().GetResult();
+                var sem = doc.GetSemanticModelAsync().GetAwaiter().GetResult();
+                if (tree is null || sem is null) continue;
+                IndexDocument(docId, tree, sem, fresh);
+            }
 
-            IndexDocument(docId, tree, sem);
+            lock (_gate)
+            {
+                _routes.RemoveAll(e => dirty.Contains(e.DocumentId));
+                _middleware.RemoveAll(e => dirty.Contains(e.DocumentId));
+                _hostedServices.RemoveAll(e => dirty.Contains(e.DocumentId));
+                _registrations.RemoveAll(e => dirty.Contains(e.DocumentId));
+                _unclassified.RemoveAll(e => dirty.Contains(e.DocumentId));
+                Publish(fresh);
+                if (ReferenceEquals(_solution, solution)) _dirty.ExceptWith(dirty);
+            }
         }
+    }
+
+    /// <summary>Caller holds <see cref="_gate"/>.</summary>
+    private void Publish(DocEntries entries)
+    {
+        _routes.AddRange(entries.Routes);
+        _middleware.AddRange(entries.Middleware);
+        _hostedServices.AddRange(entries.HostedServices);
+        _registrations.AddRange(entries.Registrations);
+        _unclassified.AddRange(entries.Unclassified);
     }
 
     // -------- Indexing one document (used by both initial build and dirty re-walk) --------
 
-    private void IndexDocument(DocumentId docId, SyntaxTree tree, SemanticModel semantic)
+    private void IndexDocument(DocumentId docId, SyntaxTree tree, SemanticModel semantic, DocEntries into)
     {
         var root = tree.GetRoot();
         foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
@@ -177,22 +206,22 @@ public sealed class InvocationIndex
             if (RouteMethods.Contains(methodName))
             {
                 var route = TryBuildRoute(invocation, semantic, docId, methodName);
-                if (route is not null) lock (_gate) _routes.Add(route);
+                if (route is not null) into.Routes.Add(route);
             }
             else if (methodName.StartsWith("Use", StringComparison.Ordinal) && IsApplicationBuilderCall(invocation, semantic))
             {
                 var loc = ToLocation(invocation);
-                if (loc is not null) lock (_gate) _middleware.Add(new MiddlewareEntry(methodName, docId, loc));
+                if (loc is not null) into.Middleware.Add(new MiddlewareEntry(methodName, docId, loc));
             }
             else if (methodName == "AddHostedService")
             {
                 var entry = TryBuildHostedService(invocation, semantic, docId);
-                if (entry is not null) lock (_gate) _hostedServices.Add(entry);
+                if (entry is not null) into.HostedServices.Add(entry);
             }
             else if (DiMethods.Contains(methodName))
             {
                 var entry = TryBuildDi(invocation, semantic, docId, methodName);
-                if (entry is not null) lock (_gate) _registrations.Add(entry);
+                if (entry is not null) into.Registrations.Add(entry);
             }
             // ponytail: only bind names that follow DI-registration conventions.
             // The semantic GetSymbolInfo inside IsServiceCollectionCall is ~50µs/call;
@@ -203,7 +232,7 @@ public sealed class InvocationIndex
             {
                 var loc = ToLocation(invocation);
                 if (loc is null) continue;
-                lock (_gate) _unclassified.Add(new DiEntry(
+                into.Unclassified.Add(new DiEntry(
                     ServiceType: null,
                     ImplType: null,
                     Lifetime: null,
@@ -227,7 +256,7 @@ public sealed class InvocationIndex
             // until those files change or a reload; dirtiness is per document (IDX-004 ceiling).
             var loc = RoslynHelpers.ToLocation(cls.Identifier.GetLocation());
             if (loc is null) continue;
-            lock (_gate) _hostedServices.Add(new HostedServiceEntry(
+            into.HostedServices.Add(new HostedServiceEntry(
                 Kind: "subclass",
                 ServiceType: null,
                 Type: type.ToDisplayString(),

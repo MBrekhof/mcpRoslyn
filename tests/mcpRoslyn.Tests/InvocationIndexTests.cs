@@ -157,4 +157,62 @@ public sealed class InvocationIndexTests
             await File.WriteAllTextAsync(programPath, original);
         }
     }
+
+    [Test]
+    public async Task Parallel_queries_during_a_refresh_never_see_a_documents_entries_missing()
+    {
+        // IDX-004: the refresh removed a document's entries and cleared its marker before re-binding it,
+        // so a query arriving in that window saw neither the old routes nor the new ones.
+        await using var host = await TestHost.CreateWorkspaceAsync();
+        var sol = await host.Workspace.GetFreshSolutionAsync();
+        var programPath = sol.Projects
+            .SelectMany(p => p.Documents)
+            .First(d => d.Name == "Program.cs" && d.Project.Name == "TestWeb")
+            .FilePath!;
+
+        var original = await File.ReadAllTextAsync(programPath);
+        try
+        {
+            await File.WriteAllTextAsync(programPath, original + "\n// touched\n");
+            File.SetLastWriteTimeUtc(programPath, DateTime.UtcNow.AddSeconds(1));
+            await host.Workspace.GetFreshSolutionAsync();
+
+            var counts = await Task.WhenAll(Enumerable.Range(0, 8)
+                .Select(_ => Task.Run(() => host.Workspace.InvocationIndex.QueryRoutes().Count)));
+            counts.Should().AllBeEquivalentTo(6);
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(programPath, original);
+        }
+    }
+
+    [Test]
+    public async Task A_file_restored_with_an_older_timestamp_is_still_a_change()
+    {
+        // IDX-004: freshness was cachedMtime >= diskMtime, so a copy or unpack preserving an older time
+        // read as unchanged.
+        await using var host = await TestHost.CreateWorkspaceAsync();
+        var sol = await host.Workspace.GetFreshSolutionAsync();
+        var programPath = sol.Projects
+            .SelectMany(p => p.Documents)
+            .First(d => d.Name == "Program.cs" && d.Project.Name == "TestWeb")
+            .FilePath!;
+
+        var original = await File.ReadAllTextAsync(programPath);
+        var originalTime = File.GetLastWriteTimeUtc(programPath);
+        try
+        {
+            await File.WriteAllTextAsync(programPath,
+                original.Replace("app.MapPost(\"/api/echo\"", "app.MapPost(\"/api/echo-restored\""));
+            File.SetLastWriteTimeUtc(programPath, originalTime.AddDays(-1));
+            await host.Workspace.GetFreshSolutionAsync();
+
+            host.Workspace.InvocationIndex.QueryRoutes().Should().Contain(r => r.Template == "/api/echo-restored");
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(programPath, original);
+        }
+    }
 }

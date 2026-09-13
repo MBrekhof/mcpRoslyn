@@ -61,11 +61,14 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
             // Solution and indexes from one workspace generation, so references are scanned against
             // the same load the candidates came from (WS-006).
             var ready = await Workspace.GetIndexedSolutionAsync(ct2);
-            var solution = ready.Solution;
             // Dirty-walked and de-duplicated by the index itself (IDX-001). The index keeps a file linked
             // into several assemblies as one symbol per assembly; here the unit is the declaration you
             // would delete, so those merge into one entry spanning all its declaring projects (IDX-005).
-            var indexed = ready.SymbolIndex.AllSymbols(solution, ct2)
+            // Candidates are resolved and scanned against the solution the index names, which a concurrent
+            // refresh may have made newer than ready.Solution (IDX-004).
+            var snapshot = ready.SymbolIndex.AllSymbols(ready.Solution, ct2);
+            var solution = snapshot.Solution;
+            var indexed = snapshot.Symbols
                 .GroupBy(e => (e.SymbolId, File: e.Info.PrimaryLocation?.FilePath))
                 .Select(g => (Entry: g.First(), DeclaringDocs: g.SelectMany(e => e.DeclaringDocs).ToArray()))
                 .ToList();

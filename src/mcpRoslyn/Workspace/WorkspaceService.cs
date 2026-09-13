@@ -129,25 +129,36 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     {
         if (_solution is null || _current is null) throw new InvalidOperationException("Workspace not loaded.");
 
-        foreach (var doc in _solution.Projects.SelectMany(p => p.Documents).ToList())
+        var changed = new List<DocumentId>();
+        try
         {
-            if (doc.FilePath is null || !File.Exists(doc.FilePath)) continue;
-            var diskMtime = File.GetLastWriteTimeUtc(doc.FilePath);
-            if (_mtimeCache.TryGetValue(doc.Id, out var cachedMtime) && cachedMtime >= diskMtime)
-                continue;
+            foreach (var doc in _solution.Projects.SelectMany(p => p.Documents).ToList())
+            {
+                if (doc.FilePath is null || !File.Exists(doc.FilePath)) continue;
+                var diskMtime = File.GetLastWriteTimeUtc(doc.FilePath);
+                // Any different timestamp, not only a newer one: a file restored with its older time
+                // (a copy or unpack preserving times) is a change too (IDX-004).
+                if (_mtimeCache.TryGetValue(doc.Id, out var cachedMtime) && cachedMtime == diskMtime)
+                    continue;
 
-            var text = await File.ReadAllTextAsync(doc.FilePath, ct);
-            _solution = _solution.WithDocumentText(
-                doc.Id,
-                Microsoft.CodeAnalysis.Text.SourceText.From(text));
-            _mtimeCache[doc.Id] = diskMtime;
-            _current.SymbolIndex.MarkDirty(doc.Id);
-            _current.InvocationIndex.MarkDirty(doc.Id);
+                var text = await File.ReadAllTextAsync(doc.FilePath, ct);
+                _solution = _solution.WithDocumentText(
+                    doc.Id,
+                    Microsoft.CodeAnalysis.Text.SourceText.From(text));
+                _mtimeCache[doc.Id] = diskMtime;
+                changed.Add(doc.Id);
+            }
         }
-
-        // Update InvocationIndex's solution snapshot so dirty re-walks
-        // see the freshly-loaded document text.
-        _current.InvocationIndex.UpdateSolution(_solution);
+        finally
+        {
+            // The changed documents and the solution holding their new text reach each index in one step —
+            // also when a later file's read throws, or the next call would skip the files already cached.
+            if (changed.Count > 0)
+            {
+                _current.SymbolIndex.Invalidate(changed, _solution);
+                _current.InvocationIndex.Invalidate(changed, _solution);
+            }
+        }
 
         return _solution;
     }

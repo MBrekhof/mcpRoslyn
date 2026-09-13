@@ -167,7 +167,7 @@ public class SymbolIndexTests
 
         try
         {
-            sut.SymbolIndex.AllSymbols(solution)
+            sut.SymbolIndex.AllSymbols(solution).Symbols
                 .Should().NotContain(e => e.Info.Name == "AddedAfterIndexBuild");
 
             File.WriteAllText(doc.FilePath!, backup + "\npublic sealed class AddedAfterIndexBuild { }\n");
@@ -176,7 +176,7 @@ public class SymbolIndexTests
             // IDX-001: AllSymbols used to return the raw build-time list, so a symbol added after
             // the index was built stayed invisible until an explicit reload_workspace.
             var refreshed = await sut.GetFreshSolutionAsync();
-            sut.SymbolIndex.AllSymbols(refreshed)
+            sut.SymbolIndex.AllSymbols(refreshed).Symbols
                 .Should().Contain(e => e.Info.Name == "AddedAfterIndexBuild");
         }
         finally
@@ -287,13 +287,13 @@ public class SymbolIndexTests
         await sut.WarmupTask;
         var solution = await sut.GetFreshSolutionAsync();
 
-        sut.SymbolIndex.AllSymbols(solution)
+        sut.SymbolIndex.AllSymbols(solution).Symbols
             .Where(e => e.SymbolId == "T:Shared.Dup")
             .Select(e => e.Info.PrimaryLocation!.FilePath)
             .Should().HaveCount(2).And.OnlyHaveUniqueItems();
 
         // The harder case: one file linked into TestApp and TestWeb — same path, two assemblies.
-        sut.SymbolIndex.AllSymbols(solution)
+        sut.SymbolIndex.AllSymbols(solution).Symbols
             .Where(e => e.SymbolId == "T:Shared.Linked")
             .Should().HaveCount(2);
     }
@@ -415,6 +415,147 @@ public class SymbolIndexTests
         {
             File.WriteAllText(part1, backup1);
             File.WriteAllText(part2, backup2);
+        }
+    }
+
+    [Test]
+    public async Task A_refresh_folds_a_change_in_once_and_keeps_members_without_syntax()
+    {
+        // IDX-004: the dirty set was never cleared, so every query re-walked every document edited since
+        // load; and that walk met only declarations, so an implicit constructor vanished on refresh.
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+
+        var solution = await sut.GetFreshSolutionAsync();
+        var path = solution.Projects.SelectMany(p => p.Documents).First(d => d.Name == "Partial1.cs").FilePath!;
+        // Identity and count: a set of ids would hide an entry that is duplicated or merged differently.
+        static List<string> Identities(SymbolIndex.IndexedSymbols index) => index.Symbols
+            .Select(e => $"{e.SymbolId}|{e.Info.PrimaryLocation?.FilePath}|{e.DeclaringDocs.Count}")
+            .Order(StringComparer.Ordinal).ToList();
+        var before = Identities(sut.SymbolIndex.AllSymbols(solution));
+        before.Should().Contain(i => i.StartsWith("M:TestLib.PartialThing.#ctor|"));
+        var backup = File.ReadAllText(path);
+        try
+        {
+            File.WriteAllText(path, backup + "\n// touched\n");
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(1));
+            var refreshed = await sut.GetFreshSolutionAsync();
+
+            Identities(sut.SymbolIndex.AllSymbols(refreshed))
+                .Should().Equal(before, "a change that declares nothing new leaves the index as the build made it");
+            var walked = sut.SymbolIndex.DocumentsWalked;
+            walked.Should().BePositive();
+
+            sut.SymbolIndex.QueryReturnType("int", refreshed);
+            sut.SymbolIndex.DocumentsWalked.Should().Be(walked, "the first query folded the change in");
+        }
+        finally
+        {
+            File.WriteAllText(path, backup);
+        }
+    }
+
+    [Test]
+    public async Task A_cancelled_refresh_leaves_the_change_for_the_next_query()
+    {
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+
+        var solution = await sut.GetFreshSolutionAsync();
+        var path = solution.Projects.SelectMany(p => p.Documents).First(d => d.Name == "Partial1.cs").FilePath!;
+        var backup = File.ReadAllText(path);
+        try
+        {
+            File.WriteAllText(path, backup.Replace("public partial class PartialThing", "[MyMarker]\npublic partial class PartialThing"));
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(1));
+            var refreshed = await sut.GetFreshSolutionAsync();
+
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            sut.SymbolIndex.Invoking(i => i.QueryAttribute("TestLib.MyMarkerAttribute", refreshed, cancelled.Token))
+                .Should().Throw<OperationCanceledException>();
+
+            sut.SymbolIndex.QueryAttribute("TestLib.MyMarkerAttribute", refreshed)
+                .Should().Contain(m => m.Name == "PartialThing");
+        }
+        finally
+        {
+            File.WriteAllText(path, backup);
+        }
+    }
+
+    [Test]
+    public async Task AllSymbols_names_the_newer_solution_when_another_refresh_overtook_the_caller()
+    {
+        // IDX-004 review: the refresh walks the newest solution, so a caller resolving the entries against
+        // its own older snapshot found a type renamed in between under neither name.
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+
+        var older = await sut.GetFreshSolutionAsync();
+        var path = older.Projects.SelectMany(p => p.Documents).First(d => d.Name == "Partial1.cs").FilePath!;
+        var backup = File.ReadAllText(path);
+        try
+        {
+            File.WriteAllText(path, backup + "\npublic sealed class AddedWhileAnotherCallWaited { }\n");
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(1));
+            var newer = await sut.GetFreshSolutionAsync(); // another tool call's refresh
+
+            var snapshot = sut.SymbolIndex.AllSymbols(older);
+
+            snapshot.Solution.Should().BeSameAs(newer);
+            snapshot.Symbols.Should().Contain(e => e.Info.Name == "AddedWhileAnotherCallWaited");
+        }
+        finally
+        {
+            File.WriteAllText(path, backup);
+        }
+    }
+
+    [Test]
+    public async Task A_refresh_that_fails_part_way_still_hands_the_files_it_read_to_the_index()
+    {
+        // IDX-004 review: invalidation ran after the scan, so a read failing on a later file lost the earlier
+        // files' changes — their timestamps were already cached, so the retry skipped them.
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+
+        var solution = await sut.GetFreshSolutionAsync();
+        var sep = Path.DirectorySeparatorChar;
+        var sources = solution.Projects.SelectMany(p => p.Documents)
+            .Select(d => d.FilePath)
+            .OfType<string>()
+            .Where(p => !p.Contains($"{sep}obj{sep}"))
+            .ToList();
+        var first = sources[0];
+        var later = sources.Last(p => p != first);
+        var backup = File.ReadAllText(first);
+        try
+        {
+            File.WriteAllText(first, backup + "\npublic sealed class ChangedBeforeAFailedRead { }\n");
+            File.SetLastWriteTimeUtc(first, DateTime.UtcNow.AddSeconds(1));
+            File.SetLastWriteTimeUtc(later, DateTime.UtcNow.AddSeconds(1));
+            using (new FileStream(later, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                var refresh = () => sut.GetFreshSolutionAsync();
+                await refresh.Should().ThrowAsync<IOException>();
+            }
+
+            var retried = await sut.GetFreshSolutionAsync();
+            sut.SymbolIndex.AllSymbols(retried).Symbols
+                .Should().Contain(e => e.Info.Name == "ChangedBeforeAFailedRead");
+        }
+        finally
+        {
+            File.WriteAllText(first, backup);
         }
     }
 }
