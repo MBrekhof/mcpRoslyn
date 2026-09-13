@@ -500,3 +500,11 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
   write tools under pressure, mcpRoslyn's lane is the architecture layer; if it ignores them, nothing changes.
 
   Any repo with a real pending task works; BPG is now the better-understood benchmark of the two.
+
+  **Run design, decided 2026-09-13.** The session measures the setup as it ships, not raw adoption: the global
+  CLAUDE.md "reach for mcpRoslyn" section and the PreToolUse hook blocking bare-identifier Grep on C# both stay on
+  (unprompted adoption was already observed on 2026-08-15). The BPG session gets only a real code-changing task —
+  suggested: ProblemDetails middleware + one error format across controllers — and is told nothing about VAL-001,
+  mcpRoslyn, roslynk or logging. The per-call log and the five questions are reconstructed afterwards from its
+  transcript, against the exe republished 2026-09-13 07:01 (`a5cdf08`). Read question (2) in that light: a grep the
+  hook denied is not the agent choosing the tool.
