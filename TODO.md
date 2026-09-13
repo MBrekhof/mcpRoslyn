@@ -454,6 +454,23 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
   - Tool failures come back as a normal `ToolResult` payload, so the MCP response's `isError` stays false (`ToolBase.cs`, `ToolError.cs`). Agents read the in-band `Error` fine; a client keyed on `isError` doesn't. **Unverified SDK claim** — confirm against ModelContextProtocol 1.3.0 with one stdio-level test first; if it holds, return `CallToolResult { IsError = true }` carrying the same payload.
   - Tests: `WorkspaceServiceTests` constructs `WorkspaceService` without `await using` (e.g. `:25`, `:36`), some tests return with warm-up still running, and `TestHost` never disposes its `ServiceProvider` (`TestHost.cs:67`).
 
+## Spotted in real-session use (BPG VAL-001 run, 2026-09-13)
+
+- [ ] **DIAG-003: get_compilation_errors fast pass skips DiagnosticSuppressors — false CS8618 errors on EF Core DbContexts** (ID: 1677) — Todo, bug
+  Found 2026-09-13 in BPG (API-001 session).
+
+  **Symptom:** `get_compilation_errors projectName=BPG.Data severity=Error` (default `includeAnalyzers: false`) returns 13 × CS8618 "Non-nullable property 'X' must contain a non-null value when exiting constructor", all on `BPGDbContext`'s constructor, one per `DbSet<T>` auto-property. `dotnet build BPG.sln`: 0 errors, 0 warnings. The same call with `includeAnalyzers: true` returns 0.
+
+  **Cause:** EF Core ships a DiagnosticSuppressor for uninitialized `DbSet<T>` properties. Suppressors only run through `CompilationWithAnalyzers`, so a plain `Compilation.GetDiagnostics()` pass reports the raw warning. BPG's `Directory.Build.props` has `<WarningsAsErrors>$(WarningsAsErrors);Nullable</WarningsAsErrors>`, which promotes it to Error.
+
+  **Why it matters:** the tool description promises "close to 'would dotnet build succeed?'" with analyzers off by default. That fails on any EF Core project using WarningsAsErrors=Nullable (typical for the XAF repos). An agent then chases errors that don't exist.
+
+  **Fix direction:** in the fast pass, still run the project's DiagnosticSuppressors (not the ordinary analyzers) and apply their suppressions. Measure the cost against the full `includeAnalyzers: true` pass. At minimum, if suppressors are skipped, say so in the result.
+
+  **Repro:** BPG solution, project BPG.Data, compare `includeAnalyzers` false vs true.
+
+  roslynk (Morris.Roslynk.Mcp) `get_diagnostics includeAnalyzers:false` has the identical behaviour, so this is a shared Roslyn-API trap, not an mcpRoslyn-only regression.
+
 ## Real-session validation (still to do)
 
 - [ ] **VAL-001: Use mcpRoslyn in one feature-sized task.** (ID: 1171) — **in Todo, est. 4 h**
