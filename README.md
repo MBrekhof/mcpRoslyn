@@ -2,7 +2,7 @@
 
 MCP server exposing C# symbol-level navigation (find-references, goto-definition, find-implementations, semantic-search, rename, etc.) to AI coding agents. Wraps Roslyn's `MSBuildWorkspace` and serves over stdio.
 
-**Status:** v1.3, tagged `v1.3.0`, with post-tag fixes on top. 20 tools plus `echo`, 227 tests. Measured timings are in [`docs/acceptance/`](docs/acceptance/), the v1 design in [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md), the architecture summary in [`ARCHITECTURE.md`](ARCHITECTURE.md), and open work in [`TODO.md`](TODO.md).
+**Status:** v1.4, tagged `v1.4.0`. 20 tools plus `echo`, 227 tests. Measured timings are in [`docs/acceptance/`](docs/acceptance/), the v1 design in [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md), the architecture summary in [`ARCHITECTURE.md`](ARCHITECTURE.md), and open work in [`TODO.md`](TODO.md).
 
 ## Latest session (2026-09-13)
 

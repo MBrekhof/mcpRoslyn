@@ -74,8 +74,8 @@ every commit, and each closure in `TODO.md` cites its SHA.
 
 ## Where things stand (2026-09-13)
 
-- **`main` is NOT pushed past `ba934ea`.** The four card commits and their closure docs are local. **227 tests pass**, 0
-  failing.
+- **`main` is pushed and tagged `v1.4.0`**, the first release since `v1.3.0`. The server now reports version 1.4.0 instead
+  of the `1.0.0.0` it always reported. **227 tests pass**, 0 failing.
 - **The published exe is CURRENT:** republished 2026-09-13 10:07 from `cb88412`, so it has every commit above; the
   stdio smoke test passed. Sessions started before then still run the old server, so restart them. Republish after
   any src change: `dotnet publish src/mcpRoslyn -c Release -o bin/publish`. Stop running `mcpRoslyn.exe` first, which

@@ -3,7 +3,13 @@
 User-visible changes, newest first, one line each. The card or issue id leads each line; per-session detail and
 measurements are in [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md), and open work is in [`TODO.md`](TODO.md).
 
-## 2026-09-13 (afternoon): VAL-001 follow-ups
+## v1.4.0 (2026-09-13)
+
+Everything after the `v1.3.0` tag. The main additions are analyzer diagnostics, dead-code chains and public-type
+sweeps, registration evidence from the compiler's bound types, and stale-workspace warnings. The server now reports
+its real version (it said `1.0.0.0` before).
+
+### 2026-09-13 (afternoon): VAL-001 follow-ups
 
 - **TOOL-012** `find_dead_code_candidates` no longer reports the program entry point as dead.
 - **DIAG-003** `get_compilation_errors` applies the project's DiagnosticSuppressors by default. BPG.Data went from 13 false CS8618 errors to 0.
@@ -16,7 +22,7 @@ measurements are in [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md), and open work is
 - **TOOL-013** Static constructors and finalizers are never reported as dead.
 - **VAL-001** Real-session validation on BPG, report in `docs/acceptance/2026-09-13-val-001-bpg-session.md`.
 
-## 2026-09-13 (morning): Codex review cards
+### 2026-09-13 (morning): Codex review cards
 
 - **DIAG-001** Both diagnostics tools can run the project's own analyzers (`includeAnalyzers`).
 - **PERF-002** The `rename_symbol` preview returns changed spans instead of whole files, and `workspace_symbol` and `semantic_search` are capped.
@@ -33,7 +39,7 @@ measurements are in [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md), and open work is
 - **WS-007** Every tool result warns when the loaded workspace no longer matches the disk.
 - **WS-005** Discovery prefers the solution with the most projects, and `reload_workspace(solutionPath)` switches solutions.
 
-## 2026-08-15
+### 2026-08-15
 
 - **TOOL-006** `find_dead_code_candidates` `includePublicTypes`: unreferenced public types, with DI-registered and framework-reached types suppressed.
 - **TOOL-003** `find_dead_code_candidates` `Skipped` counters describe the whole solution, and `Truncated` was added.
@@ -45,30 +51,32 @@ measurements are in [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md), and open work is
 - **WS-004** Non-fatal MSBuild messages report as `ProjectLoadedWithWarnings`, not `Failure`.
 - **WS-002** Fixed the obsolete `WorkspaceFailed` event; the build is warning-free.
 
-## 2026-06-15
+### 2026-06-15
 
 - **#1** `InvocationIndex` warm-up is about 2× faster end to end (the DI bind is gated behind a cheap name filter).
 
-## 2026-06-04 / 2026-06-08
+### 2026-06-04
 
 - Solution discovery also searches downward when none is found walking up.
-- Tagged `v1.3.0`.
 
-## 2026-05-21: v1.3
+### 2026-05-21 (after the v1.3.0 merge)
+
+- **#4** `find_references` and `find_implementations` de-duplicate locations.
+
+## v1.3.0 (2026-05-21, tagged 2026-06-08)
 
 - New tools: `project_overview`, `find_entrypoints`, `find_registrations`, `find_callees`, `analyze_symbol`, `test_map` and `find_dead_code_candidates`.
 - `format = "structured" | "summary"` on every tool.
 - Diagnostics filters: `includeGenerated`, `excludeDiagnosticCodes` and `minimumSeverity`.
-- **#4** `find_references` and `find_implementations` de-duplicate locations.
 
-## 2026-05-16: v1.1 and v1.2
+## v1.1 and v1.2 (2026-05-16)
 
 - **v1.1** Background warm-up pre-compilation, so the first query drops from ~8.4 s to ~1.9 s.
 - **v1.1** `--log-file` flag.
 - **v1.1** MSBuild load failures surface as `WorkspaceLoadDiagnostic`.
 - **v1.2** `SymbolIndex` for `semantic_search` `has-attribute`/`returns`/`parameter-type`, about 1000× faster.
 
-## 2026-05-15: v1
+## v1 (2026-05-15)
 
 - MCP stdio server over Roslyn's `MSBuildWorkspace`, with mtime-based per-call refresh.
 - Tools: `reload_workspace`, `list_document_symbols`, `workspace_symbol`, `goto_definition`, `hover`, `find_references`, `find_implementations`, `find_derived_types`, `find_callers`, `get_document_diagnostics`, `get_compilation_errors`, `semantic_search` and `rename_symbol` (preview by default).
