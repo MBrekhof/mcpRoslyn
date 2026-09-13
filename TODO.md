@@ -460,7 +460,9 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
 
 ## Spotted in real-session use (BPG VAL-001 run, 2026-09-13)
 
-- [ ] **DIAG-003: get_compilation_errors fast pass skips DiagnosticSuppressors — false CS8618 errors on EF Core DbContexts** (ID: 1677) — Todo, bug
+- [x] ~~**DIAG-003: get_compilation_errors fast pass skips DiagnosticSuppressors — false CS8618 errors on EF Core DbContexts**~~ (ID: 1677)
+  Done 2026-09-13 (`d752b4f`). The default pass now applies the project's DiagnosticSuppressors. The suppressor-only whole-compilation pass that `get_document_diagnostics` already ran moved into `RoslynHelpers.ApplySuppressorsAsync`, shared by both tools; it runs only when a loaded suppressor claims a diagnostic ID that is present. On BPG.Data the default pass went from 13 false CS8618 errors to 0. Cost on BPG, solution-wide default: ~45 ms → ~340 ms, since BPG.Data's suppressor makes the pass run; analyzers-on is still ~2 s. `get_document_diagnostics` with `includeAnalyzers: false` is deliberately unchanged, as the explicit fast compiler-only path. Codex review found nothing.
+
   Found 2026-09-13 in BPG (API-001 session).
 
   **Symptom:** `get_compilation_errors projectName=BPG.Data severity=Error` (default `includeAnalyzers: false`) returns 13 × CS8618 "Non-nullable property 'X' must contain a non-null value when exiting constructor", all on `BPGDbContext`'s constructor, one per `DbSet<T>` auto-property. `dotnet build BPG.sln`: 0 errors, 0 warnings. The same call with `includeAnalyzers: true` returns 0.
