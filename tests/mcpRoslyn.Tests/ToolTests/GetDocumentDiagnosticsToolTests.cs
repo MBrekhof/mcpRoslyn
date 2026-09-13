@@ -182,15 +182,20 @@ public class GetDocumentDiagnosticsToolTests
 #pragma warning restore RS1001
 }
 
-internal sealed class DiagnosticTestWorkspace(Solution solution) : IWorkspaceService
+internal sealed class DiagnosticTestWorkspace(
+    Solution solution,
+    IReadOnlyList<mcpRoslyn.Contracts.WorkspaceLoadDiagnostic>? diagnostics = null,
+    IReadOnlyList<mcpRoslyn.Contracts.WorkspaceLoadDiagnostic>? pairedDiagnostics = null) : IWorkspaceService
 {
     public Task LoadAsync(CancellationToken ct = default) => Task.CompletedTask;
     public Task ReloadAsync(CancellationToken ct = default) => Task.CompletedTask;
     public Task<Solution> GetFreshSolutionAsync(CancellationToken ct = default) => Task.FromResult(solution);
     public int LoadedProjectCount => solution.ProjectIds.Count;
     public Task WarmupTask => Task.CompletedTask;
-    public IReadOnlyList<mcpRoslyn.Contracts.WorkspaceLoadDiagnostic> Diagnostics => [];
+    public IReadOnlyList<mcpRoslyn.Contracts.WorkspaceLoadDiagnostic> Diagnostics => diagnostics ?? [];
     public SymbolIndex SymbolIndex => throw new NotSupportedException();
     public InvocationIndex InvocationIndex => throw new NotSupportedException();
     public Task<IndexedSolution> GetIndexedSolutionAsync(CancellationToken ct = default) => throw new NotSupportedException();
+    public Task<LoadedSolution> GetFreshSolutionWithDiagnosticsAsync(CancellationToken ct = default)
+        => Task.FromResult(new LoadedSolution(solution, pairedDiagnostics ?? []));
 }

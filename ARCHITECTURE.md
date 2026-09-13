@@ -90,7 +90,9 @@ Every response is spent from the agent's context budget, so response size is mea
 
 ### Diagnostics filter knobs
 
-`get_compilation_errors` and `get_document_diagnostics` accept `includeGenerated`, `minimumSeverity` (default `"Warning"`), `excludeDiagnosticCodes`, `excludeDiagnosticSources`. Pure post-filter at collection time, never affects how diagnostics are read from Roslyn.
+`get_compilation_errors` and `get_document_diagnostics` accept `includeGenerated`, `minimumSeverity` (default `"Warning"`) and `excludeDiagnosticCodes`. Pure post-filter at collection time, never affects how diagnostics are read from Roslyn. An exact `severity` overrides the minimum — otherwise `severity: "Info"` was always emptied by the Warning default (DIAG-002). (`excludeDiagnosticSources` was advertised and never applied; it is gone.)
+
+`get_compilation_errors` covers only the projects that loaded, so its result carries `LoadFailures` — workspace load diagnostics still of kind `Failure` after reclassification, one per project named plus one per distinct message naming none — and a clean list with that above zero is not a clean build. Reclassification (WS-004) compares the quoted project *path* — a relative one resolved against the solution directory — with the loaded projects' paths, so a failed `B\Foo.csproj` is not mistaken for a loaded `A\Foo.csproj`; the file name is used only when a message quotes no path. Load diagnostics belong to the workspace generation, so a failed reload keeps the serving generation's diagnostics with its solution. `projectName` matches a project's name, or a multi-targeted project's name with a target-framework suffix such as `(net8.0)`; an unknown name is `PROJECT_NOT_FOUND` rather than an empty success.
 
 ### Analyzer diagnostics (DIAG-001)
 
@@ -116,7 +118,7 @@ Three layers:
 2. **Tool envelope** (`ToolBase.ExecuteAsync`) — catches `FileNotFoundException`, `InvalidOperationException`, generic `Exception`; returns `ToolError { code, message, hint? }`.
 3. **Empty results** — `find_references` on an unused symbol returns `[]`, not an error. Empty is not failure.
 
-Codes: `WORKSPACE_NOT_LOADED`, `FILE_NOT_IN_WORKSPACE`, `SYMBOL_NOT_FOUND`, `POSITION_INVALID`, `INVALID_PATTERN`, `RENAME_CONFLICT`, `INDEX_UNAVAILABLE`, `AMBIGUOUS_SYMBOL_ID`, `INTERNAL_ERROR`.
+Codes: `WORKSPACE_NOT_LOADED`, `FILE_NOT_IN_WORKSPACE`, `SYMBOL_NOT_FOUND`, `POSITION_INVALID`, `INVALID_PATTERN`, `RENAME_CONFLICT`, `INDEX_UNAVAILABLE`, `AMBIGUOUS_SYMBOL_ID`, `PROJECT_NOT_FOUND`, `INTERNAL_ERROR`.
 
 A `DocumentationCommentId` carries no assembly identity, so two projects declaring the same fully-qualified name share one id (every top-level-statements project's `Program` does). **Symbol identity.** `SymbolIndex` keys entries on (id, declaration file, declaring assembly *name*), folds partial members to their definition part, and keeps every declaring document when one declaration is seen through several projects of the same assembly; resolving a `symbolId` that names distinct symbols fails with `AMBIGUOUS_SYMBOL_ID` — listing each declaration and its assembly — instead of answering about whichever project enumerates first (IDX-005). The assembly name is what separates a file linked into two projects (same path, two symbols) from one assembly built for several target frameworks or a referenced project's source seen through a referencing compilation (one symbol). `find_dead_code_candidates` works one level up, on the declaration you would delete: a linked or multi-targeted declaration's copies merge into one candidate, judged towards keeping the code (most exposed accessibility; a reference or denylisted attribute on any copy spares it).
 

@@ -8,6 +8,14 @@ public interface IWorkspaceService
     Task LoadAsync(CancellationToken ct = default);
     Task ReloadAsync(CancellationToken ct = default);
     Task<Solution> GetFreshSolutionAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// The refreshed solution together with the load diagnostics of the same workspace generation, for a
+    /// tool that reports on both: read separately, a reload landing in between pairs one generation's
+    /// solution with another's load failures (DIAG-002). It does not wait for index warm-up — a tool that
+    /// needs indexes uses <see cref="GetIndexedSolutionAsync"/>.
+    /// </summary>
+    Task<LoadedSolution> GetFreshSolutionWithDiagnosticsAsync(CancellationToken ct = default);
     int LoadedProjectCount { get; }
 
     /// <summary>
@@ -19,9 +27,11 @@ public interface IWorkspaceService
     Task WarmupTask { get; }
 
     /// <summary>
-    /// MSBuildWorkspace diagnostics raised during the most recent load/reload —
-    /// typically projects that failed to evaluate (missing SDK, missing referenced csproj, etc.).
-    /// Cleared at the start of each <see cref="LoadAsync"/>/<see cref="ReloadAsync"/>.
+    /// MSBuildWorkspace diagnostics raised while loading the current workspace generation — typically
+    /// projects that failed to evaluate (missing SDK, missing referenced csproj, etc.). A successful
+    /// reload replaces them; a failed reload leaves the previous generation's diagnostics in place.
+    /// A tool reporting on a solution and its load failures together reads both through
+    /// <see cref="GetFreshSolutionWithDiagnosticsAsync"/> instead of this property.
     /// </summary>
     IReadOnlyList<WorkspaceLoadDiagnostic> Diagnostics { get; }
 
@@ -45,3 +55,6 @@ public interface IWorkspaceService
     /// </summary>
     Task<IndexedSolution> GetIndexedSolutionAsync(CancellationToken ct = default);
 }
+
+/// <summary>A refreshed solution and the load diagnostics of the generation it came from.</summary>
+public sealed record LoadedSolution(Solution Solution, IReadOnlyList<WorkspaceLoadDiagnostic> LoadDiagnostics);

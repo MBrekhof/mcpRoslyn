@@ -169,6 +169,21 @@ public class WorkspaceServiceTests
             @"Msbuild failed when processing the file 'C:\x\Gone.csproj' with message: whatever.", "Gone");
         WorkspaceService.Reclassify(missing, loaded).Kind.Should().Be("Failure");
 
+        // DIAG-002: when the loaded paths are known, the quoted path decides — B\Foo.csproj failing is not
+        // "loaded" just because A\Foo.csproj shares its file name.
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Foo" };
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { @"C:\sln\A\Foo.csproj" };
+        var otherFoo = new Contracts.WorkspaceLoadDiagnostic("Failure",
+            @"Msbuild failed when processing the file 'C:\sln\B\Foo.csproj' with message: missing SDK.", "Foo");
+        WorkspaceService.Reclassify(otherFoo, names, paths).Kind.Should().Be("Failure");
+        var sameFoo = otherFoo with { Message = @"Msbuild failed when processing the file 'C:\sln\A\Foo.csproj' with message: pruning." };
+        WorkspaceService.Reclassify(sameFoo, names, paths).Kind.Should().Be("ProjectLoadedWithWarnings");
+        // A relative quoted path resolves against the solution directory instead of falling back to the name.
+        var relativeOther = otherFoo with { Message = @"Cannot open project 'B\Foo.csproj' because it is missing." };
+        WorkspaceService.Reclassify(relativeOther, names, paths, @"C:\sln").Kind.Should().Be("Failure");
+        var relativeSame = otherFoo with { Message = @"Cannot open project 'B\..\A\Foo.csproj' because of a warning." };
+        WorkspaceService.Reclassify(relativeSame, names, paths, @"C:\sln").Kind.Should().Be("ProjectLoadedWithWarnings");
+
         // Already-classified kinds are left alone.
         var esproj = new Contracts.WorkspaceLoadDiagnostic("SkippedUnsupportedProject", "…", "Frontend");
         WorkspaceService.Reclassify(esproj, loaded).Kind.Should().Be("SkippedUnsupportedProject");
@@ -324,12 +339,64 @@ public class WorkspaceServiceTests
     }
 
     [Test]
+    public async Task Solution_with_diagnostics_does_not_wait_for_the_index_build()
+    {
+        // get_compilation_errors needs no index; its paired read must not block on warm-up.
+        await using var sut = new WorkspaceService(
+            new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath }, NullLogger<WorkspaceService>.Instance);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        sut.BeforeIndexBuild = () => release.Task;
+        try
+        {
+            await sut.LoadAsync();
+            var loaded = await sut.GetFreshSolutionWithDiagnosticsAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            loaded.Solution.Projects.Should().NotBeEmpty();
+            sut.WarmupTask.IsCompleted.Should().BeFalse("the index build is still held");
+        }
+        finally
+        {
+            release.TrySetResult(); // the hook ignores cancellation: never leave disposal waiting on it
+        }
+    }
+
+    [Test]
+    public async Task Failed_reload_keeps_the_serving_generations_load_diagnostics()
+    {
+        // DIAG-002 review: diagnostics were cleared before a reload opened its solution, so a reload that
+        // then failed left the old solution serving with no record of its load failures — and
+        // get_compilation_errors reporting LoadFailures 0.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"mcpRoslyn-keepdiags-{Guid.NewGuid()}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var slnPath = Path.Combine(tempDir, "Broken.sln");
+            File.WriteAllText(slnPath,
+                "Microsoft Visual Studio Solution File, Format Version 12.00\n" +
+                "Project(\"{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}\") = \"Missing\", \"Missing\\Missing.csproj\", \"{11111111-1111-1111-1111-111111111111}\"\n" +
+                "EndProject\n");
+            await using var sut = new WorkspaceService(
+                new McpRoslynOptions { SolutionPath = slnPath }, NullLogger<WorkspaceService>.Instance);
+            await sut.LoadAsync();
+            sut.Diagnostics.Should().Contain(d => d.Message.Contains("Missing", StringComparison.OrdinalIgnoreCase));
+
+            File.Delete(slnPath);
+            var reload = () => sut.ReloadAsync();
+            await reload.Should().ThrowAsync<Exception>();
+
+            sut.Diagnostics.Should().Contain(d => d.Message.Contains("Missing", StringComparison.OrdinalIgnoreCase),
+                "the generation still serving keeps its own load diagnostics");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Test]
     public async Task ReloadAsync_clears_prior_diagnostics()
     {
-        // First load a broken solution to populate diagnostics, then reload pointing
-        // at the clean fixture and verify the stale diagnostics are gone. We can't
-        // re-point options at runtime, so we use two separate WorkspaceService instances
-        // here — the contract under test is that Clear() runs at the top of LoadUnsafeAsync.
+        // Reload the same broken solution: each successful load publishes a generation carrying its own
+        // diagnostics, so a reload replaces them rather than appending to the previous load's list.
         var tempDir = Path.Combine(Path.GetTempPath(), $"mcpRoslyn-broken-{Guid.NewGuid()}");
         Directory.CreateDirectory(tempDir);
         try

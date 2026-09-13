@@ -16,13 +16,12 @@ internal sealed class GetDocumentDiagnosticsTool(IWorkspaceService ws, ILogger<G
     : ToolBase(ws, log)
 {
     [McpServerTool(Name = "get_document_diagnostics")]
-    [Description("Returns Roslyn diagnostics for one file: compiler diagnostics plus, by default, the project's own analyzers (NetAnalyzers, StyleCop, …) at their configured .editorconfig severities — set includeAnalyzers=false for compiler-only. Compilation-end analyzer rules (whole-project checks) are not run per file. Defaults: minimumSeverity=\"Warning\" (Info/Hidden hidden), includeGenerated=true; pass minimumSeverity=\"All\" to see everything. excludeDiagnosticCodes and excludeDiagnosticSources accept string arrays.")]
+    [Description("Returns Roslyn diagnostics for one file: compiler diagnostics plus, by default, the project's own analyzers (NetAnalyzers, StyleCop, …) at their configured .editorconfig severities — set includeAnalyzers=false for compiler-only. Compilation-end analyzer rules (whole-project checks) are not run per file. Defaults: minimumSeverity=\"Warning\" (Info/Hidden hidden), includeGenerated=true; pass minimumSeverity=\"All\" to see everything, or an exact severity (it overrides the minimum). excludeDiagnosticCodes accepts a string array.")]
     public Task<Contracts.ToolResult<GetDocumentDiagnosticsResult>> InvokeAsync(
         string filePath, string? severity,
         bool includeGenerated = true,
         string? minimumSeverity = "Warning",
         string[]? excludeDiagnosticCodes = null,
-        string[]? excludeDiagnosticSources = null,
         bool includeAnalyzers = true,
         string format = "structured",
         CancellationToken ct = default)
@@ -97,8 +96,9 @@ internal sealed class GetDocumentDiagnosticsTool(IWorkspaceService ws, ILogger<G
                 .ToList();
 
             // Post-collection filters (applied in order; do not affect index construction)
+            // An exact severity asked for explicitly wins over the default minimum (DIAG-002).
             var filtered = GetCompilationErrorsTool.ApplyFilters(
-                mapped, includeGenerated, minimumSeverity, excludeDiagnosticCodes, excludeDiagnosticSources);
+                mapped, includeGenerated, exactSeverity is not null ? "All" : minimumSeverity, excludeDiagnosticCodes);
 
             var result = new GetDocumentDiagnosticsResult(filtered);
             if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))

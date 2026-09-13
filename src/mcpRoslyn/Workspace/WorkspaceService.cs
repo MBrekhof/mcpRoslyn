@@ -13,8 +13,6 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     private Generation? _current;
     private Solution? _solution;
     private Dictionary<DocumentId, DateTime> _mtimeCache = new();
-    private readonly List<WorkspaceLoadDiagnostic> _diagnostics = new();
-    private readonly object _diagnosticsLock = new();
     private readonly List<Generation> _retiring = new();       // lock on itself
     private readonly CancellationTokenSource _disposeCts = new(); // ends retirement grace periods early
 
@@ -42,14 +40,26 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         public Task Warmup { get; set; } = Task.CompletedTask;
         public Exception? SymbolIndexFailure { get; set; }
         public Exception? InvocationIndexFailure { get; set; }
+        /// <summary>This load's MSBuild diagnostics; lock on the list itself.</summary>
+        public List<WorkspaceLoadDiagnostic> Diagnostics { get; } = new();
     }
 
     public int LoadedProjectCount => _solution?.Projects.Count() ?? 0;
     public Task WarmupTask => _current?.Warmup ?? Task.CompletedTask;
 
+    /// <summary>
+    /// The current generation's load diagnostics. They belong to the generation, so a failed reload —
+    /// which leaves the previous generation serving — also leaves its diagnostics (DIAG-002). A tool
+    /// reporting on a solution and its load failures together reads both through
+    /// <see cref="GetFreshSolutionWithDiagnosticsAsync"/>, not this property.
+    /// </summary>
     public IReadOnlyList<WorkspaceLoadDiagnostic> Diagnostics
     {
-        get { lock (_diagnosticsLock) return _diagnostics.ToArray(); }
+        get
+        {
+            if (_current is not { } gen) return [];
+            lock (gen.Diagnostics) return gen.Diagnostics.ToArray();
+        }
     }
 
     public SymbolIndex SymbolIndex
@@ -99,6 +109,19 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     {
         await _gate.WaitAsync(ct);
         try { return await RefreshUnsafeAsync(ct); }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<LoadedSolution> GetFreshSolutionWithDiagnosticsAsync(CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            // Publication happens under the same gate, so the solution and diagnostics are one generation's.
+            var solution = await RefreshUnsafeAsync(ct);
+            var gen = _current!;
+            lock (gen.Diagnostics) return new LoadedSolution(solution, gen.Diagnostics.ToArray());
+        }
         finally { _gate.Release(); }
     }
 
@@ -162,34 +185,44 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     /// an absent project stays a `Failure`, which is the honest signal for a declared-but-unloaded
     /// project (WS-004).
     /// </summary>
-    internal static WorkspaceLoadDiagnostic Reclassify(WorkspaceLoadDiagnostic diag, ISet<string> loadedProjectFileNames)
-        => diag.Kind == "Failure"
-           && diag.ProjectName is not null
-           && loadedProjectFileNames.Contains(diag.ProjectName)
-            ? diag with { Kind = "ProjectLoadedWithWarnings" }
-            : diag;
-
-    private void ReclassifyLoadedProjectDiagnostics(Solution solution)
+    internal static WorkspaceLoadDiagnostic Reclassify(
+        WorkspaceLoadDiagnostic diag, ISet<string> loadedProjectFileNames,
+        ISet<string>? loadedProjectPaths = null, string? baseDirectory = null)
     {
-        // Compare on the .csproj file name, not Project.Name — a multi-targeted project is named
-        // "Foo(net8.0)" while the message quotes the path to Foo.csproj.
-        var loaded = solution.Projects
-            .Select(p => p.FilePath)
-            .Where(f => f is not null)
-            .Select(f => Path.GetFileNameWithoutExtension(f)!)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (diag.Kind != "Failure" || diag.ProjectName is null) return diag;
+        // Compare full paths when the message quotes one: two projects in different folders can share a
+        // file name, and a failure of B/Foo.csproj must not read as loaded because A/Foo.csproj did
+        // (DIAG-002). A relative quoted path resolves against the solution's directory; the file name is
+        // the fallback only when there is no path to resolve.
+        var quoted = ProjectPathInMessage.Match(diag.Message) is { Success: true } match ? match.Groups[1].Value : null;
+        var fullQuoted = quoted is null ? null
+            : Path.IsPathRooted(quoted) ? Path.GetFullPath(quoted)
+            : baseDirectory is not null ? Path.GetFullPath(Path.Combine(baseDirectory, quoted))
+            : null;
+        var loaded = loadedProjectPaths is not null && fullQuoted is not null
+            ? loadedProjectPaths.Contains(fullQuoted)
+            : loadedProjectFileNames.Contains(diag.ProjectName);
+        return loaded ? diag with { Kind = "ProjectLoadedWithWarnings" } : diag;
+    }
 
-        lock (_diagnosticsLock)
+    private void ReclassifyLoadedProjectDiagnostics(Generation gen, Solution solution)
+    {
+        // Compare on the .csproj path (or file name), not Project.Name — a multi-targeted project is
+        // named "Foo(net8.0)" while the message quotes the path to Foo.csproj.
+        var projectFiles = solution.Projects.Select(p => p.FilePath).OfType<string>().ToList();
+        var loadedNames = projectFiles.Select(f => Path.GetFileNameWithoutExtension(f)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var loadedPaths = projectFiles.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(options.SolutionPath));
+
+        lock (gen.Diagnostics)
         {
-            for (var i = 0; i < _diagnostics.Count; i++)
-                _diagnostics[i] = Reclassify(_diagnostics[i], loaded);
+            for (var i = 0; i < gen.Diagnostics.Count; i++)
+                gen.Diagnostics[i] = Reclassify(gen.Diagnostics[i], loadedNames, loadedPaths, solutionDirectory);
         }
     }
 
     private async Task LoadUnsafeAsync(CancellationToken ct)
     {
-        lock (_diagnosticsLock) _diagnostics.Clear();
-
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var gen = new Generation(MSBuildWorkspace.Create());
         // RegisterWorkspaceFailedHandler, not the WorkspaceFailed event: the event is obsolete in
@@ -202,7 +235,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
                 ? "SkippedUnsupportedProject"
                 : e.Diagnostic.Kind.ToString();
             var diag = new WorkspaceLoadDiagnostic(kind, e.Diagnostic.Message, ExtractProjectName(e.Diagnostic.Message));
-            lock (_diagnosticsLock) _diagnostics.Add(diag);
+            lock (gen.Diagnostics) gen.Diagnostics.Add(diag);
             log.LogWarning("MSBuild workspace event: {Kind} {Message}", kind, e.Diagnostic.Message);
         });
 
@@ -223,7 +256,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
 
         // Has to happen here, not in the handler: diagnostics arrive during the load, before there
         // is a project list to check them against (WS-004).
-        ReclassifyLoadedProjectDiagnostics(solution);
+        ReclassifyLoadedProjectDiagnostics(gen, solution);
 
         var mtimes = new Dictionary<DocumentId, DateTime>();
         foreach (var doc in solution.Projects.SelectMany(p => p.Documents))
