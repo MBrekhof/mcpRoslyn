@@ -188,7 +188,9 @@ internal sealed class DiagnosticTestWorkspace(
     IReadOnlyList<mcpRoslyn.Contracts.WorkspaceLoadDiagnostic>? pairedDiagnostics = null) : IWorkspaceService
 {
     public Task LoadAsync(CancellationToken ct = default) => Task.CompletedTask;
-    public Task ReloadAsync(CancellationToken ct = default) => Task.CompletedTask;
+    public Task<WorkspaceLoad> ReloadAsync(string? solutionPath = null, CancellationToken ct = default)
+        => Task.FromResult(new WorkspaceLoad(SolutionPath, solution.Projects.Count(), []));
+    public string SolutionPath => solution.FilePath ?? "";
     public Task<Solution> GetFreshSolutionAsync(CancellationToken ct = default) => Task.FromResult(solution);
     public int LoadedProjectCount => solution.ProjectIds.Count;
     public Task WarmupTask => Task.CompletedTask;

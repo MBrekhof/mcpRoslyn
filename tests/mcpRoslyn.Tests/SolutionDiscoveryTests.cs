@@ -123,4 +123,45 @@ public class SolutionDiscoveryTests
 
         SolutionDiscovery.Discover(_root).Should().BeNull();
     }
+
+    [Test]
+    public void Discover_prefers_the_solution_declaring_the_most_projects_in_one_directory()
+    {
+        // WS-005: Electron.NET keeps ElectronNET.Lean.sln (4 projects) beside ElectronNET.sln (all of them); name
+        // order picked the lean one and every query was blind to the test and app projects.
+        File.WriteAllText(Path.Combine(_root, "A.Lean.sln"), SlnWith(1));
+        var full = Path.Combine(_root, "B.Full.sln");
+        File.WriteAllText(full, SlnWith(3));
+
+        SolutionDiscovery.Discover(_root).Should().Be(full);
+    }
+
+    [Test]
+    public void ProjectCount_counts_indented_csharp_declarations_only_and_reads_slnx()
+    {
+        // Codex review: MSBuild trims .sln lines, so an indented declaration is real; folders and non-C# projects
+        // (.esproj) are not something the workspace loads, so they must not make a solution look bigger.
+        var sln = Path.Combine(_root, "Folders.sln");
+        File.WriteAllText(sln, SlnWith(1) +
+            "  Project(\"{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}\") = \"Indented\", \"Indented\\Indented.csproj\", \"{55555555-5555-5555-5555-555555555555}\"\r\nEndProject\r\n" +
+            "Project(\"{2150E333-8FDC-42A3-9474-1A3956D46DE8}\") = \"src\", \"src\", \"{33333333-3333-3333-3333-333333333333}\"\nEndProject\n" +
+            // A folder may be named like a project, and a malformed line may mention one: neither is a declaration.
+            "Project(\"{2150E333-8FDC-42A3-9474-1A3956D46DE8}\") = \"Tools.csproj\", \"Tools.csproj\", \"{77777777-7777-7777-7777-777777777777}\"\nEndProject\n" +
+            "Project(garbage.csproj\n" +
+            "Project(\"{garbage}\") = \"Bogus\", \"Bogus.csproj\", \"{garbage}\" trailing junk\n" +
+            "Project(\"{54A90642-561A-4BB1-A94E-469ADEE60C69}\") = \"web\", \"web\\web.esproj\", \"{66666666-6666-6666-6666-666666666666}\"\nEndProject\n" +
+            // Real ones in other shapes: a name with spaces, lowercase GUIDs, a VB project.
+            "Project(\"{f184b08f-c81c-45f6-a57f-5abd9991f28f}\") = \"My Vb Lib\", \"My Vb Lib\\My Vb Lib.vbproj\", \"{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}\"\nEndProject\n");
+        SolutionDiscovery.ProjectCount(new FileInfo(sln)).Should().Be(3);
+
+        var slnx = Path.Combine(_root, "X.slnx");
+        File.WriteAllText(slnx,
+            "<Solution><Folder Name=\"/src/\"><Project Path=\"a/a.csproj\" /></Folder><Project Path=\"b/b.csproj\" />" +
+            "<Project Path=\"legacy.csproj/web.esproj\" /></Solution>");
+        SolutionDiscovery.ProjectCount(new FileInfo(slnx)).Should().Be(2);
+    }
+
+    private static string SlnWith(int projects) =>
+        "Microsoft Visual Studio Solution File, Format Version 12.00\n" + string.Concat(Enumerable.Range(0, projects).Select(i =>
+            $"Project(\"{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}\") = \"P{i}\", \"P{i}\\P{i}.csproj\", \"{{{Guid.NewGuid()}}}\"\nEndProject\n"));
 }

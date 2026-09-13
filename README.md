@@ -77,7 +77,7 @@ Register once:
 }
 ```
 
-mcpRoslyn discovers the solution by first walking **up** from Claude Code's CWD looking for `*.sln` or `*.slnx` (the closest enclosing solution wins). If none is found up the tree, it then searches **down** (breadth-first, skipping `bin`/`obj`/`node_modules`/`packages` and dot-directories) so a solution nested in a subfolder like `src/` is still found — the shallowest match wins. The first one found is loaded.
+mcpRoslyn discovers the solution by first walking **up** from Claude Code's CWD looking for `*.sln` or `*.slnx` (the closest enclosing solution wins). If none is found up the tree, it then searches **down** (breadth-first, skipping `bin`/`obj`/`node_modules`/`packages` and dot-directories) so a solution nested in a subfolder like `src/` is still found — the shallowest match wins. When one directory holds several (a lean and a full solution side by side), the one declaring the most C#/VB projects wins, then `.sln` before `.slnx`, then name. `project_overview` shows which solution is loaded; to switch mid-session, call `reload_workspace` with `solutionPath` set to the full path of another `.sln`/`.slnx`.
 
 ### Per-project (`.mcp.json` in the project root) — pin to one solution
 

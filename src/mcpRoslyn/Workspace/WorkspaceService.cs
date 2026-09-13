@@ -32,9 +32,11 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     /// failed reload leaves the previous generation serving, and a warm-up can only ever build
     /// into its own generation's indexes (WS-006).
     /// </summary>
-    private sealed class Generation(MSBuildWorkspace workspace)
+    private sealed class Generation(MSBuildWorkspace workspace, string solutionPath)
     {
         public MSBuildWorkspace Workspace { get; } = workspace;
+        /// <summary>The full path this load opened — the startup choice, or what reload_workspace switched to (WS-005).</summary>
+        public string SolutionPath { get; } = solutionPath;
         public SymbolIndex SymbolIndex { get; } = new();
         public InvocationIndex InvocationIndex { get; } = new();
         public CancellationTokenSource Cts { get; } = new();
@@ -79,7 +81,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
             // ponytail: read without the gate — mid-publish this can pair a new generation with the previous
             // solution for one call, which at worst adds or drops a warning once.
             if (_current is not { } gen || _solution is not { } solution) return [];
-            var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(options.SolutionPath))!;
+            var solutionDirectory = Path.GetDirectoryName(gen.SolutionPath)!;
             string Show(string path) => Path.GetRelativePath(solutionDirectory, path);
 
             var reasons = new List<string>();
@@ -140,7 +142,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     /// </summary>
     private void TrackStaleness(Generation gen, Solution solution)
     {
-        var solutionPath = Path.GetFullPath(options.SolutionPath);
+        var solutionPath = gen.SolutionPath;
         var buildFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { solutionPath };
         var directories = new List<string> { Path.GetDirectoryName(solutionPath)! };
         foreach (var projectPath in solution.Projects.Select(p => p.FilePath).OfType<string>())
@@ -289,11 +291,25 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     public async Task LoadAsync(CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
-        try { await LoadUnsafeAsync(ct); }
+        try { await LoadUnsafeAsync(options.SolutionPath, ct); }
         finally { _gate.Release(); }
     }
 
-    public Task ReloadAsync(CancellationToken ct = default) => LoadAsync(ct);
+    public async Task<WorkspaceLoad> ReloadAsync(string? solutionPath = null, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            await LoadUnsafeAsync(solutionPath ?? SolutionPath, ct);
+            // Read under the gate: an overlapping reload publishing next can't mix its solution into this answer.
+            var gen = _current!;
+            lock (gen.Diagnostics)
+                return new WorkspaceLoad(gen.SolutionPath, _solution!.Projects.Count(), gen.Diagnostics.ToArray());
+        }
+        finally { _gate.Release(); }
+    }
+
+    public string SolutionPath => _current?.SolutionPath ?? Path.GetFullPath(options.SolutionPath);
 
     public async Task<Solution> GetFreshSolutionAsync(CancellationToken ct = default)
     {
@@ -423,7 +439,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         var projectFiles = solution.Projects.Select(p => p.FilePath).OfType<string>().ToList();
         var loadedNames = projectFiles.Select(f => Path.GetFileNameWithoutExtension(f)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var loadedPaths = projectFiles.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(options.SolutionPath));
+        var solutionDirectory = Path.GetDirectoryName(gen.SolutionPath);
 
         lock (gen.Diagnostics)
         {
@@ -432,10 +448,10 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         }
     }
 
-    private async Task LoadUnsafeAsync(CancellationToken ct)
+    private async Task LoadUnsafeAsync(string solutionPath, CancellationToken ct)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var gen = new Generation(MSBuildWorkspace.Create());
+        var gen = new Generation(MSBuildWorkspace.Create(), Path.GetFullPath(solutionPath));
         // RegisterWorkspaceFailedHandler, not the WorkspaceFailed event: the event is obsolete in
         // Roslyn 5.3 (CS0618 on every build) and its replacement no longer forces the UI thread.
         gen.Workspace.RegisterWorkspaceFailedHandler(e =>
@@ -454,9 +470,9 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         var mtimes = new Dictionary<DocumentId, DateTime>();
         try
         {
-            solution = await gen.Workspace.OpenSolutionAsync(options.SolutionPath, cancellationToken: ct);
+            solution = await gen.Workspace.OpenSolutionAsync(gen.SolutionPath, cancellationToken: ct);
             log.LogInformation("Loaded {ProjectCount} projects in {Elapsed} ms from {Path}",
-                solution.Projects.Count(), sw.ElapsedMilliseconds, options.SolutionPath);
+                solution.Projects.Count(), sw.ElapsedMilliseconds, gen.SolutionPath);
 
             // Has to happen here, not in the handler: diagnostics arrive during the load, before there
             // is a project list to check them against (WS-004).

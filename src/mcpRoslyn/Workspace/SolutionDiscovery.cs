@@ -63,19 +63,62 @@ public static class SolutionDiscovery
         return null;
     }
 
-    /// <summary>An unreadable or vanished directory holds no solution; it must not abort discovery (TOOL-011).</summary>
+    /// <summary>
+    /// The solutions in one directory, the one declaring the most projects first: a repo with a lean and a
+    /// full solution side by side should load the full one, or every query is blind to the projects only it
+    /// declares (WS-005). Ties keep .sln before .slnx, then name order. An unreadable or vanished directory
+    /// holds no solution; it must not abort discovery (TOOL-011).
+    /// </summary>
     private static IEnumerable<FileInfo> SolutionsIn(DirectoryInfo dir)
     {
         try
         {
             return dir.GetFiles("*.sln")
                 .Concat(dir.GetFiles("*.slnx"))
-                .OrderBy(f => f.Extension, StringComparer.OrdinalIgnoreCase) // .sln before .slnx
+                .OrderByDescending(ProjectCount)
+                .ThenBy(f => f.Extension, StringComparer.OrdinalIgnoreCase) // .sln before .slnx
                 .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
         catch (UnauthorizedAccessException) { return []; }
         catch (DirectoryNotFoundException) { return []; }
+    }
+
+    private const string GuidPattern = "[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}";
+
+    /// <summary><c>Project("{type}") = "Name", "path", "{id}"</c>, whole line — capturing the type GUID and the path.</summary>
+    private static readonly System.Text.RegularExpressions.Regex SlnProjectDeclaration = new(
+        "^Project\\(\"\\{(" + GuidPattern + ")\\}\"\\)\\s*=\\s*\"[^\"]*\"\\s*,\\s*\"([^\"]+)\"\\s*,\\s*\"\\{" + GuidPattern + "\\}\"\\s*$",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Solution folders are declared like projects, under their own type GUID — and may be named anything.</summary>
+    private const string SolutionFolderTypeGuid = "2150E333-8FDC-42A3-9474-1A3956D46DE8";
+
+    /// <summary>
+    /// The C#/VB projects a solution declares — what the workspace can load; solution folders, malformed lines and
+    /// .esproj/.sqlproj entries don't count. MSBuild trims each .sln line before recognising a declaration, so
+    /// indented ones count. ponytail: declared projects, not the project-reference closure — a lean solution whose
+    /// projects reference others still scores only its own.
+    /// </summary>
+    internal static int ProjectCount(FileInfo solution)
+    {
+        try
+        {
+            var text = File.ReadAllText(solution.FullName);
+            var paths = solution.Extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase)
+                ? System.Xml.Linq.XDocument.Parse(text).Descendants("Project").Select(p => (string?)p.Attribute("Path"))
+                : text.Split('\n')
+                    .Select(line => SlnProjectDeclaration.Match(line.Trim()))
+                    .Where(m => m.Success && !m.Groups[1].Value.Equals(SolutionFolderTypeGuid, StringComparison.OrdinalIgnoreCase))
+                    .Select(m => (string?)m.Groups[2].Value);
+            return paths.Count(path => Path.GetExtension(path?.Trim()) is { } extension
+                                       && (extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+                                           || extension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase)));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+        {
+            return 0; // unreadable: still a candidate, just never preferred
+        }
     }
 
     private static bool IsSearchable(DirectoryInfo dir) =>

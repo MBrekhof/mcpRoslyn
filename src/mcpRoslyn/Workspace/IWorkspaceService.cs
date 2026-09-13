@@ -6,7 +6,15 @@ namespace mcpRoslyn.Workspace;
 public interface IWorkspaceService
 {
     Task LoadAsync(CancellationToken ct = default);
-    Task ReloadAsync(CancellationToken ct = default);
+    /// <summary>
+    /// Re-evaluates the solution being served, or switches to <paramref name="solutionPath"/> when given (WS-005).
+    /// A solution that fails to open leaves the current generation serving (WS-006). Returns what it loaded, read
+    /// under the same gate, so an overlapping reload can't mix its solution into this answer.
+    /// </summary>
+    Task<WorkspaceLoad> ReloadAsync(string? solutionPath = null, CancellationToken ct = default);
+
+    /// <summary>The full path of the solution the serving generation opened.</summary>
+    string SolutionPath { get; }
     Task<Solution> GetFreshSolutionAsync(CancellationToken ct = default);
 
     /// <summary>
@@ -68,3 +76,6 @@ public interface IWorkspaceService
 
 /// <summary>A refreshed solution and the load diagnostics of the generation it came from.</summary>
 public sealed record LoadedSolution(Solution Solution, IReadOnlyList<WorkspaceLoadDiagnostic> LoadDiagnostics);
+
+/// <summary>What one reload published: its solution path, project count and load diagnostics.</summary>
+public sealed record WorkspaceLoad(string SolutionPath, int ProjectCount, IReadOnlyList<WorkspaceLoadDiagnostic> Diagnostics);
