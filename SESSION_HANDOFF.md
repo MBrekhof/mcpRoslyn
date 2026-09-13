@@ -41,8 +41,8 @@ every commit, and each closure in `TODO.md` cites its SHA.
 ## Where things stand (2026-09-13)
 
 - **`main` is pushed** (last code commit `cf3b81c`). **198 tests pass**, 0 failing.
-- **Published exe is STALE** — `bin/publish/mcpRoslyn.exe` is from 2026-08-15 09:47 and predates every commit above.
-  Live Claude Code sessions still run the old server. Republish when no session needs it:
+- **Published exe is CURRENT** — republished 2026-09-13 07:01 from `a5cdf08`, so it carries every commit above. Sessions
+  started before then still ran the old server; restart them. Republish after any src change:
   `dotnet publish src/mcpRoslyn -c Release -o bin/publish` (stop running `mcpRoslyn.exe` first).
 - **Open cards are all deferred or blocked:** VAL-001 (real-session validation) is the only actionable one; TOOL-004,
   TOOL-005 and TOOL-007 wait on it; DIST-001/002/003 and ARCH-001 stay deferred by their own bodies.
