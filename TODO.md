@@ -501,7 +501,31 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
   - a type whose only references come from inside candidates
 
   **Direction:** after the first pass, iterate to a fixed point, marking a symbol dead when every reference, or every consumer of its registration, lies inside an already-dead declaration. Give these their own reason (e.g. `only-referenced-by-dead-code`) and medium confidence, since one false root poisons the whole chain. Watch the cost: the reference scan (`:147`) is the expensive part.
-- [ ] **TOOL-014: find_registrations returns nothing useful when the query names an unregistered type** (ID: 1680) — Todo, feature
+
+  **Design, settled 2026-09-13 with a Codex read-only consult.** Options weighed:
+  - **A:** propagation over reference locations
+  - **B:** A plus treating DI registration call sites as non-use
+  - **C:** B plus test-project references not keeping production code alive
+
+  B and C cannot catch the motivating chain without changing semantics: BPG's integration-test factory and the Testing branch in `Program.cs` both referenced `ILLMService` and registered `MockLlmService`. B's "inside a registration invocation" is also too broad, since a factory lambda `sp => new Live(sp.GetRequiredService<T>())` is a genuine use of `T`.
+
+  **Shipping:**
+  1. A, run to a fixed point over the reference locations already collected. Analysis completes before the `maxResults` cap, because an unscanned symbol must stay unknown, never dead. Every copy's references count. Candidates are medium confidence and name the dead declarations keeping them.
+  2. An advisory list: registered services whose observed constructor consumers are all candidates, with the registration location. This is evidence, not a dead verdict.
+
+  C (test references don't count) stays unbuilt unless asked for; if it comes, it should be an explicit mode, not a default change.
+- [x] ~~**TOOL-014: find_registrations returns nothing useful when the query names an unregistered type**~~ (ID: 1680)
+  Done 2026-09-13 (`8d834fe`). When a query matches no registration, `find_registrations` returns `unregisteredTypes`: the solution's types whose name (full name, for a dotted query) contains it, reconciled against every registration the index holds.
+
+  Eleven Codex review rounds, each finding a registration shape the first version missed, took "unregistered" from a text match to real evidence, fixing two shared layers on the way:
+  - **`RegistrationLookup`**, now shared with `find_dead_code_candidates`:
+    - `AddHostedService` registrations count, and `BackgroundService` subclasses that are never registered don't (dead-code used to treat every subclass as registered).
+    - Generic names reduce to their definition (`Repo<Foo>` ~ `Repo<T>`).
+    - Source text vouches for a type only where the index resolved none.
+  - **`InvocationIndex`** reads registration types from the bound method, not the syntax: inferred type arguments, `typeof` operands by parameter name, `AddHostedService(factory)`, and the implementation behind a factory or instance argument (single return type, implicit conversions only), for generic and non-generic overloads.
+
+  **Remaining limit:** registration shapes the index can't resolve at all (custom extension methods that register internally, reflection or assembly scanning) still read as unregistered unless their call text names the type.
+
   Found 2026-09-13 in VAL-001 run 1 (`docs/acceptance/2026-09-13-val-001-bpg-session.md`).
 
   `find_registrations query:"CodeGenerationService"` returned `{"registrations":[],"unclassified":[],"truncated":[]}`. The type existed and was not registered, which was exactly the answer the agent needed. But an empty result reads the same as a typo or a type that doesn't exist, so the agent followed up with two greps (`\bILLMService\b`, `\b(CodeGenerationService|CodeGenerationServiceV2)\b`).
