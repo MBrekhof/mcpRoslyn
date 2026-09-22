@@ -548,10 +548,13 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
 
 ## Spotted in real-session use (netwasm review, 2026-09-22)
 
-- [ ] **WS-008: Degrade instead of dying when the solution fails to load at startup** (ID: 1801)
+- [x] ~~**WS-008: Degrade instead of dying when the solution fails to load at startup**~~ (ID: 1801)
 
-  A startup load failure (global.json SDK pin; no solution found) kills the process, and the client sees only
-  CONNECTION_CLOSED. Plan: [`docs/plans/2026-09-22-ws-008-degrade-on-load-failure.md`](docs/plans/2026-09-22-ws-008-degrade-on-load-failure.md).
+  Done 2026-09-22 in `56409dc`. A startup failure no longer ends the process, so the client no longer sees only
+  CONNECTION_CLOSED. The failures covered: an unresolvable global.json SDK pin (which crashed in two places, the
+  MSBuildLocator and the BuildHost), no solution discovered, a missing `--solution`, and no SDK at all. Every tool
+  now answers WORKSPACE_NOT_LOADED naming the cause, and `reload_workspace` recovers. Verified on netwasm; 233/233
+  tests pass. Plan: [`docs/plans/2026-09-22-ws-008-degrade-on-load-failure.md`](docs/plans/2026-09-22-ws-008-degrade-on-load-failure.md).
 
 - [ ] **WS-009: Exit when the parent process dies, so orphaned servers stop piling up** (ID: 1802)
 
