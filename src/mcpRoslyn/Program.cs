@@ -9,9 +9,9 @@ using mcpRoslyn.Tools;
 using mcpRoslyn.Workspace;
 
 // MUST be first - before any Microsoft.CodeAnalysis.* type is touched.
-MSBuildLocator.RegisterDefaults();
+var msBuildFailure = RegisterMSBuild();
 
-var options = ParseArgs(args);
+var options = ParseArgs(args) with { MSBuildFailure = msBuildFailure };
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -37,6 +37,31 @@ builder.Services
 
 await builder.Build().RunAsync();
 
+// The locator resolves the SDK through the working directory's global.json, and throws when that pins an SDK that is
+// not installed — before the host exists, so the process died with nothing for the client but "Connection closed"
+// (WS-008). A pin that resolves is still honoured; one that doesn't falls back to the SDK seen from the exe's own
+// directory, and the solution's load then reports the pin through WORKSPACE_NOT_LOADED.
+// No SDK at all is returned, not thrown: the startup load reports it and the server stays up.
+static Exception? RegisterMSBuild()
+{
+    try { MSBuildLocator.RegisterDefaults(); return null; }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine($"MSBuild SDK resolution from {Environment.CurrentDirectory} failed; using the SDK seen from {AppContext.BaseDirectory}. {ex.Message}");
+        var instance = MSBuildLocator.QueryVisualStudioInstances(new VisualStudioInstanceQueryOptions
+            {
+                DiscoveryTypes = DiscoveryType.DotNetSdk,
+                WorkingDirectory = AppContext.BaseDirectory,
+            })
+            .OrderByDescending(i => i.Version)
+            .FirstOrDefault();
+        if (instance is null)
+            return new InvalidOperationException($"No .NET SDK found for MSBuild; install one and restart the MCP server. {ex.Message}", ex);
+        try { MSBuildLocator.RegisterInstance(instance); return null; }
+        catch (Exception registerFailure) { return registerFailure; }
+    }
+}
+
 static McpRoslynOptions ParseArgs(string[] args)
 {
     string? solution = null;
@@ -60,12 +85,10 @@ static McpRoslynOptions ParseArgs(string[] args)
         }
     }
 
+    // Not validated here: throwing before the host starts ended the process with nothing but "Connection closed"
+    // at the client. A missing or undiscoverable solution is the startup load's failure to report (WS-008).
     if (string.IsNullOrWhiteSpace(solution))
-        solution = SolutionDiscovery.Discover(Environment.CurrentDirectory)
-            ?? throw new FileNotFoundException(
-                $"No --solution provided and no .sln or .slnx found by searching up or down from {Environment.CurrentDirectory}");
-    else if (!File.Exists(solution))
-        throw new FileNotFoundException($"Solution file not found: {solution}");
+        solution = SolutionDiscovery.Discover(Environment.CurrentDirectory);
 
     return new McpRoslynOptions { SolutionPath = solution, LogLevel = logLevel, LogFile = logFile };
 }

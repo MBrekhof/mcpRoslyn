@@ -546,6 +546,18 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
 
   **Direction:** only when nothing matches, look the query up in the SymbolIndex and return the matching type names as e.g. `unregisteredTypes: ["BPG.CodeGeneration.Services.CodeGenerationService", ...]`, capped. That is one lookup, and only on the empty path.
 
+## Spotted in real-session use (netwasm review, 2026-09-22)
+
+- [ ] **WS-008: Degrade instead of dying when the solution fails to load at startup** (ID: 1801)
+
+  A startup load failure (global.json SDK pin; no solution found) kills the process, and the client sees only
+  CONNECTION_CLOSED. Plan: [`docs/plans/2026-09-22-ws-008-degrade-on-load-failure.md`](docs/plans/2026-09-22-ws-008-degrade-on-load-failure.md).
+
+- [ ] **WS-009: Exit when the parent process dies, so orphaned servers stop piling up** (ID: 1802)
+
+  About 15 orphaned `mcpRoslyn.exe` processes at 130–240 MB each (user screenshot, 2026-09-22). Watch the parent PID and
+  stop the host when it exits; first confirm that stdin EOF already ends the process. Full body on the card.
+
 ## Real-session validation
 
 - [x] ~~**VAL-001: Use mcpRoslyn in one feature-sized task.**~~ (ID: 1171)

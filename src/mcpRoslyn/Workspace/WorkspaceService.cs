@@ -255,16 +255,16 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
     }
 
     public SymbolIndex SymbolIndex
-        => _current?.SymbolIndex ?? throw new InvalidOperationException("Workspace not loaded.");
+        => _current?.SymbolIndex ?? throw NotLoaded();
 
     public InvocationIndex InvocationIndex
-        => _current?.InvocationIndex ?? throw new InvalidOperationException("Workspace not loaded.");
+        => _current?.InvocationIndex ?? throw NotLoaded();
 
     public async Task<IndexedSolution> GetIndexedSolutionAsync(CancellationToken ct = default)
     {
         while (true)
         {
-            var gen = _current ?? throw new InvalidOperationException("Workspace not loaded.");
+            var gen = _current ?? throw NotLoaded();
             try
             {
                 await gen.Warmup.WaitAsync(ct);
@@ -288,19 +288,59 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         }
     }
 
+    /// <summary>
+    /// Why the startup load failed, kept so every tool can name the cause (WS-008). Only read while no
+    /// generation is published, so a later successful reload makes it irrelevant without clearing it.
+    /// </summary>
+    private volatile Exception? _startupFailure;
+
+    /// <summary>
+    /// The startup load. A failure — an unresolvable global.json SDK pin, no solution found — is recorded, not
+    /// thrown: thrown from the host's StartAsync it ended the process, and the client saw only "Connection closed"
+    /// (WS-008). The server stays up, tools answer WORKSPACE_NOT_LOADED with the cause, reload_workspace recovers.
+    /// </summary>
     public async Task LoadAsync(CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
-        try { await LoadUnsafeAsync(options.SolutionPath, ct); }
+        try
+        {
+            if (options.MSBuildFailure is { } msBuildFailure) throw msBuildFailure;
+            var path = options.SolutionPath ?? throw NoSolutionFound();
+            await LoadUnsafeAsync(path, ct);
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
+        {
+            log.LogError(ex, "Loading the solution failed; tools will report WORKSPACE_NOT_LOADED until reload_workspace succeeds");
+            _startupFailure = ex;
+        }
         finally { _gate.Release(); }
     }
+
+    private static FileNotFoundException NoSolutionFound() => new(
+        $"No --solution provided and no .sln or .slnx found by searching up or down from {Environment.CurrentDirectory}");
+
+    /// <summary>What a tool gets while no generation is published.</summary>
+    private WorkspaceNotLoadedException NotLoaded() => _startupFailure is { } failure
+        ? new($"Workspace not loaded: {(options.SolutionPath is null ? "" : $"opening {SolutionPath} ")}failed at startup: {failure.Message}", failure)
+        : new("Workspace not loaded.");
 
     public async Task<WorkspaceLoad> ReloadAsync(string? solutionPath = null, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            await LoadUnsafeAsync(solutionPath ?? SolutionPath, ct);
+            // Explicit argument, then what is serving or configured, then discovery: a solution may have been
+            // created since a startup that found none. A served solution that disappeared fails, it is not swapped.
+            var path = solutionPath
+                ?? (_current is null && options.SolutionPath is null
+                    ? SolutionDiscovery.Discover(Environment.CurrentDirectory) ?? throw new WorkspaceNotLoadedException(NoSolutionFound().Message)
+                    : SolutionPath);
+            try { await LoadUnsafeAsync(path, ct); }
+            catch (Exception ex) when (_current is null && ex is not OperationCanceledException)
+            {
+                // Nothing is serving, so this is still the not-loaded state, with the hint that goes with it.
+                throw new WorkspaceNotLoadedException($"Workspace not loaded: opening {Path.GetFullPath(path)} failed: {ex.Message}", ex);
+            }
             // Read under the gate: an overlapping reload publishing next can't mix its solution into this answer.
             var gen = _current!;
             lock (gen.Diagnostics)
@@ -309,7 +349,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         finally { _gate.Release(); }
     }
 
-    public string SolutionPath => _current?.SolutionPath ?? Path.GetFullPath(options.SolutionPath);
+    public string SolutionPath => _current?.SolutionPath ?? (options.SolutionPath is { } path ? Path.GetFullPath(path) : "");
 
     public async Task<Solution> GetFreshSolutionAsync(CancellationToken ct = default)
     {
@@ -333,7 +373,7 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
 
     private async Task<Solution> RefreshUnsafeAsync(CancellationToken ct)
     {
-        if (_solution is null || _current is null) throw new InvalidOperationException("Workspace not loaded.");
+        if (_solution is null || _current is null) throw NotLoaded();
 
         var changed = new List<DocumentId>();
         var missing = new List<string>();

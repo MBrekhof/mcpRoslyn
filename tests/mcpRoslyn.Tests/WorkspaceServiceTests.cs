@@ -105,6 +105,7 @@ public class WorkspaceServiceTests
 
         await sut.LoadAsync();
 
+        sut.LoadedProjectCount.Should().Be(4, "a failed load is recorded, not thrown, and also has no diagnostics");
         sut.Diagnostics.Should().BeEmpty();
     }
 
@@ -425,5 +426,50 @@ public class WorkspaceServiceTests
         {
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    [Test]
+    public async Task A_startup_cancelled_mid_load_throws_and_is_not_recorded_as_a_load_failure()
+    {
+        // WS-008 records startup failures instead of throwing them; the host's own cancellation must still throw.
+        // Cancelled after the uncontended gate is taken, while the solution opens (which takes seconds).
+        await using var sut = new WorkspaceService(
+            new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath }, NullLogger<WorkspaceService>.Instance);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var load = () => sut.LoadAsync(cts.Token);
+        await load.Should().ThrowAsync<OperationCanceledException>();
+
+        var refresh = () => sut.GetFreshSolutionAsync();
+        (await refresh.Should().ThrowAsync<WorkspaceNotLoadedException>()).Which.Message.Should().Be("Workspace not loaded.");
+    }
+
+    [Test]
+    public async Task No_usable_sdk_at_startup_is_recorded_and_reported()
+    {
+        await using var sut = new WorkspaceService(
+            new McpRoslynOptions
+            {
+                SolutionPath = FixturePaths.TestSolutionPath,
+                MSBuildFailure = new InvalidOperationException("No .NET SDK found for MSBuild; install one and restart the MCP server."),
+            },
+            NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+
+        var refresh = () => sut.GetFreshSolutionAsync();
+        (await refresh.Should().ThrowAsync<WorkspaceNotLoadedException>()).WithMessage("*No .NET SDK found*");
+    }
+
+    [Test]
+    public async Task A_failed_startup_load_is_recorded_and_named_by_every_not_loaded_error()
+    {
+        await using var sut = new WorkspaceService(
+            new McpRoslynOptions { SolutionPath = null }, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+
+        var refresh = () => sut.GetFreshSolutionAsync();
+        (await refresh.Should().ThrowAsync<WorkspaceNotLoadedException>()).WithMessage("*No --solution provided*");
+        var indexed = () => sut.GetIndexedSolutionAsync();
+        await indexed.Should().ThrowAsync<WorkspaceNotLoadedException>();
+        sut.SolutionPath.Should().BeEmpty();
     }
 }

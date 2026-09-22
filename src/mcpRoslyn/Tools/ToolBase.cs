@@ -92,6 +92,11 @@ internal abstract class ToolBase(IWorkspaceService workspace, ILogger logger)
         {
             return ToolResult<T>.Fail("FILE_NOT_IN_WORKSPACE", ex.Message);
         }
+        catch (WorkspaceNotLoadedException ex)
+        {
+            return ToolResult<T>.Fail("WORKSPACE_NOT_LOADED", ex.Message,
+                "Fix the cause, then call reload_workspace.");
+        }
         catch (InvalidOperationException ex)
         {
             return ToolResult<T>.Fail("WORKSPACE_NOT_LOADED", ex.Message);

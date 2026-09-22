@@ -34,7 +34,8 @@ internal sealed class ProjectOverviewTool(IWorkspaceService ws, ILogger<ProjectO
         CancellationToken ct = default)
         => ExecuteAsync(async ct2 =>
         {
-            var solution = await Workspace.GetFreshSolutionAsync(ct2);
+            // Solution and diagnostics read together, so a concurrent reload cannot pair one generation with another's.
+            var (solution, diagnostics) = await Workspace.GetFreshSolutionWithDiagnosticsAsync(ct2);
             var projects = solution.Projects.Take(maxProjects).Select(p =>
             {
                 var facts = ReadCsproj(p.FilePath, maxPackagesPerProject, log);
@@ -54,7 +55,7 @@ internal sealed class ProjectOverviewTool(IWorkspaceService ws, ILogger<ProjectO
             var result = new ProjectOverviewResult(
                 SolutionPath: solution.FilePath ?? "",
                 Projects: projects,
-                Diagnostics: Workspace.Diagnostics);
+                Diagnostics: diagnostics);
             if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
                 return Contracts.ToolResult<ProjectOverviewResult>.OkSummary($"{result.Projects.Count} projects");
             return Contracts.ToolResult<ProjectOverviewResult>.Ok(result);
