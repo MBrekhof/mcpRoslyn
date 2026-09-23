@@ -556,7 +556,10 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
   now answers WORKSPACE_NOT_LOADED naming the cause, and `reload_workspace` recovers. Verified on netwasm; 233/233
   tests pass. Plan: [`docs/plans/2026-09-22-ws-008-degrade-on-load-failure.md`](docs/plans/2026-09-22-ws-008-degrade-on-load-failure.md).
 
-- [ ] **WS-009: Exit when the parent process dies, so orphaned servers stop piling up** (ID: 1802)
+- [x] ~~**WS-009: Exit when the parent process dies, so orphaned servers stop piling up**~~ (ID: 1802)
+
+  Closed 2026-09-23 without code. The pile came from the Codex plugin's per-project brokers outliving their
+  session, not from mcpRoslyn failing to exit. mcpRoslyn is out of the Codex config, and no pile-up since. Notes below.
 
   About 15 orphaned `mcpRoslyn.exe` processes at 130–240 MB each (user screenshot, 2026-09-22). Watch the parent PID and
   stop the host when it exits; first confirm that stdin EOF already ends the process.
