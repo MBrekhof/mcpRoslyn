@@ -559,7 +559,22 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
 - [ ] **WS-009: Exit when the parent process dies, so orphaned servers stop piling up** (ID: 1802)
 
   About 15 orphaned `mcpRoslyn.exe` processes at 130–240 MB each (user screenshot, 2026-09-22). Watch the parent PID and
-  stop the host when it exits; first confirm that stdin EOF already ends the process. Full body on the card.
+  stop the host when it exits; first confirm that stdin EOF already ends the process.
+
+  **Investigated 2026-09-23 — not reproduced, nothing built.** Every path tried ends the process:
+  - stdin EOF → exit 0 in 2 s (repo dir) and 10 s (home dir, discovery + load first).
+  - A node parent holding the stdio pipes, killed with `taskkill /F` → child gone within 5 s.
+  - Codex's mcpRoslyn has been disabled since 2026-09-15 (`~/.codex/config.toml`), so it can't be the source.
+  - mcpRoslyn is registered **user-scope** in `~/.claude.json`: every Claude Code session in any directory starts one.
+    The screenshot's ~130 MB instances fit sessions outside a .NET repo (degraded, no solution), so they may have
+    been live sessions, not orphans. The screenshot doesn't show parents, so this is unverified.
+  - One real gap: the startup load runs inside `StartAsync`, before the stdio transport reads stdin. A load that
+    **hangs** (e.g. a stuck BuildHost) would never see EOF. Not observed.
+
+  **Next time the pile appears**, capture parents before killing anything (PowerShell):
+  `Get-CimInstance Win32_Process -Filter "Name='mcpRoslyn.exe'" | select ProcessId,ParentProcessId,CreationDate,CommandLine`
+  and check each ParentProcessId with `Get-Process -Id`. Dead parents → build the parent-PID watch. Live
+  `claude.exe` parents → not a bug; consider project-scoping the registration instead.
 
 ## Real-session validation
 
