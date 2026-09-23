@@ -564,7 +564,12 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
   **Investigated 2026-09-23 — not reproduced, nothing built.** Every path tried ends the process:
   - stdin EOF → exit 0 in 2 s (repo dir) and 10 s (home dir, discovery + load first).
   - A node parent holding the stdio pipes, killed with `taskkill /F` → child gone within 5 s.
-  - Codex's mcpRoslyn has been disabled since 2026-09-15 (`~/.codex/config.toml`), so it can't be the source.
+  - **Source found (user: "always occurs when calling Codex to do a review"):** the Codex plugin starts one detached
+    broker per workspace (`codex app-server` + every MCP server in `~/.codex/config.toml`) and keeps it after the
+    review; only its `SessionEnd` hook tears it down. Stale `broker.json` for 8 projects (incl. NetWasm) show that
+    teardown often doesn't run. An mcpRoslyn under such a broker has a **live** parent, so a parent-PID watch would
+    not stop it. mcpRoslyn has been commented out of the Codex config since 2026-09-15 (file last written
+    2026-09-22 18:41); with it out, a review starts zero mcpRoslyn processes (verified 2026-09-23).
   - mcpRoslyn is registered **user-scope** in `~/.claude.json`: every Claude Code session in any directory starts one.
     The screenshot's ~130 MB instances fit sessions outside a .NET repo (degraded, no solution), so they may have
     been live sessions, not orphans. The screenshot doesn't show parents, so this is unverified.
