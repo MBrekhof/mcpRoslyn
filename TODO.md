@@ -559,7 +559,10 @@ are the pair to do first — together they are "indexed tools can answer wrong, 
 - [x] ~~**WS-009: Exit when the parent process dies, so orphaned servers stop piling up**~~ (ID: 1802)
 
   Closed 2026-09-23 without code. The pile came from the Codex plugin's per-project brokers outliving their
-  session, not from mcpRoslyn failing to exit. mcpRoslyn is out of the Codex config, and no pile-up since. Notes below.
+  session, not from mcpRoslyn failing to exit. Fixed on the plugin side: a local patch (`C:\Projects\codex-plugin-cc-cleanup`,
+  uncommitted, installed into the plugin cache) makes an idle broker shut down 60 s after its last client and
+  kill its process tree. mcpRoslyn is back in the Codex config. Verified 2026-09-23: a review's mcpRoslyn is gone
+  61 s after the task. A plugin update can overwrite the patch; re-run `tools/install-local-cleanup.mjs --apply`.
 
   About 15 orphaned `mcpRoslyn.exe` processes at 130–240 MB each (user screenshot, 2026-09-22). Watch the parent PID and
   stop the host when it exits; first confirm that stdin EOF already ends the process.
