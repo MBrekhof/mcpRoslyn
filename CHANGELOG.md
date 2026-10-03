@@ -3,6 +3,11 @@
 User-visible changes, newest first, one line each. The card or issue id leads each line; per-session detail and
 measurements are in [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md), and open work is on the ContextBoard project `mcpRoslyn` (board-only since 2026-10-03).
 
+## Unreleased (after v1.4.0)
+
+- **WS-008** The server degrades instead of dying when the solution or SDK fails to load: a `global.json` pinning an uninstalled SDK falls back to the SDK next to the exe, and every tool answers `WORKSPACE_NOT_LOADED` with the cause until `reload_workspace` recovers.
+- **WS-009** Orphaned server processes after Codex reviews are the Codex plugin broker's lifecycle; no server change.
+
 ## v1.4.0 (2026-09-13)
 
 Everything after the `v1.3.0` tag. The main additions are analyzer diagnostics, dead-code chains and public-type

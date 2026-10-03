@@ -4,14 +4,10 @@ MCP server exposing C# symbol-level navigation (find-references, goto-definition
 
 **Status:** v1.4, tagged `v1.4.0`. 20 tools plus `echo`, 227 tests. Measured timings are in [`docs/acceptance/`](docs/acceptance/), the v1 design in [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md), the architecture summary in [`ARCHITECTURE.md`](ARCHITECTURE.md), and open work on the ContextBoard project `mcpRoslyn` (board-only since 2026-10-03; `list_cards`).
 
-## Latest session (2026-09-13)
+## Latest sessions (2026-09-22, 2026-09-23)
 
-- `find_dead_code_candidates` no longer reports the program entry point, static constructors or finalizers as dead.
-- `find_dead_code_candidates` also reports code used only by other dead code (`only-referenced-by-dead-code`, with `keptAliveBy`).
-- `find_dead_code_candidates` lists DI registrations whose only constructor consumers are dead (`registrationsWithOnlyDeadConsumers`).
-- `get_compilation_errors` applies the project's DiagnosticSuppressors, so EF Core's CS8618 on `DbSet` no longer shows as a false error.
-- `find_registrations` names the matching types that exist but aren't registered when a query finds nothing (`unregisteredTypes`).
-- DI registrations resolve inferred, `typeof`, factory and instance forms to real types, and unregistered `BackgroundService` subclasses no longer count as registered.
+- The server no longer dies at startup when `global.json` pins an uninstalled SDK, no solution is found, or `--solution` is wrong: it stays up, every tool answers `WORKSPACE_NOT_LOADED` naming the cause, and `reload_workspace` recovers (WS-008).
+- Orphaned `mcpRoslyn.exe` processes after Codex reviews traced to the Codex plugin's broker lifecycle, not this server; closed without code (WS-009).
 
 Earlier changes are in [`CHANGELOG.md`](CHANGELOG.md), and per-session detail in [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md).
 
