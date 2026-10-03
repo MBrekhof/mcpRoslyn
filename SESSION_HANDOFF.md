@@ -2,6 +2,9 @@
 
 **Last updated:** 2026-09-13 afternoon (VAL-001 closed; its four follow-up cards built with Codex reviews)
 
+**Board-only since 2026-10-03 (SYNC-007).** `TODO.md` is deleted; open work is on the ContextBoard project `mcpRoslyn`
+(`list_cards`). Never recreate `TODO.md` here. Mentions of it below are history.
+
 ## What the 2026-09-13 VAL-001 session did
 
 VAL-001 ran as two BPG sessions. The report is `docs/acceptance/2026-09-13-val-001-bpg-session.md`.

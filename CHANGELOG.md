@@ -1,7 +1,7 @@
 # Changelog
 
 User-visible changes, newest first, one line each. The card or issue id leads each line; per-session detail and
-measurements are in [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md), and open work is in [`TODO.md`](TODO.md).
+measurements are in [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md), and open work is on the ContextBoard project `mcpRoslyn` (board-only since 2026-10-03).
 
 ## v1.4.0 (2026-09-13)
 
