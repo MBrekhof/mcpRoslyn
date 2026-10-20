@@ -1,11 +1,19 @@
 # mcpRoslyn
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
+  <img alt="mcpRoslyn system overview rendered by Archify.Net: Claude Code talks over MCP stdio to mcpRoslyn.exe (MCP stdio host, 20 tool handlers, WorkspaceService, MSBuildWorkspace, SymbolIndex, and InvocationIndex), reading solution and source files, running project analyzers, and optionally writing rename edits to the working tree." src="docs/images/hero-light.png">
+</picture>
+
+<sub>Rendered from [`docs/images/mcproslyn.architecture.json`](docs/images/mcproslyn.architecture.json) by `archify finalize architecture` (`Archify.Net`).</sub>
+
 MCP server exposing C# symbol-level navigation (find-references, goto-definition, find-implementations, semantic-search, rename, etc.) to AI coding agents. Wraps Roslyn's `MSBuildWorkspace` and serves over stdio.
 
-**Status:** v1.4, tagged `v1.4.0`. 20 tools plus `echo`, 227 tests. Measured timings are in [`docs/acceptance/`](docs/acceptance/), the v1 design in [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md), the architecture summary in [`ARCHITECTURE.md`](ARCHITECTURE.md), and open work on the ContextBoard project `mcpRoslyn` (board-only since 2026-10-03; `list_cards`).
+**Status:** v1.4, tagged `v1.4.0`. 20 tools plus `echo`, 239 tests. Measured timings are in [`docs/acceptance/`](docs/acceptance/), the v1 design in [`docs/plans/2026-05-15-mcproslyn-design.md`](docs/plans/2026-05-15-mcproslyn-design.md), the architecture summary in [`ARCHITECTURE.md`](ARCHITECTURE.md), and open work on the ContextBoard project `mcpRoslyn` (board-only since 2026-10-03; `list_cards`).
 
-## Latest sessions (2026-09-22, 2026-09-23)
+## Latest sessions (2026-09-22, 2026-09-23, 2026-10-20)
 
+- Repository review & bug-fix sweep (2026-10-20): `find_dead_code_candidates` no longer flags explicit interface implementations or private helpers they reach (`TOOL-015`); `find_callers` seeds the target symbol into `seen` and deduplicates multiple call sites in one caller body (`TOOL-016`); `reload_workspace` checks `MSBuildFailure` before touching the workspace (`WS-010`); `find_callees` walks both halves of partial methods (`TOOL-017`); `SymbolIndex.Refresh` expands the dirty document walk when a file newly joins an existing partial symbol (`IDX-006`); `analyze_symbol` and `find_derived_types` deduplicate multi-reference and partial-declaration results (`TOOL-018`); removed sync-over-async in `ComputeConfidence` and build warning in `AcceptanceTests` (`TOOL-019`).
 - The server no longer dies at startup when `global.json` pins an uninstalled SDK, no solution is found, or `--solution` is wrong: it stays up, every tool answers `WORKSPACE_NOT_LOADED` naming the cause, and `reload_workspace` recovers (WS-008).
 - Orphaned `mcpRoslyn.exe` processes after Codex reviews traced to the Codex plugin's broker lifecycle, not this server; closed without code (WS-009).
 

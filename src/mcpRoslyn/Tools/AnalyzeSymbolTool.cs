@@ -137,6 +137,7 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
             .Select(l => RoslynHelpers.ToLocation(l.Location))
             .Where(l => l is not null)
             .Cast<Contracts.SymbolLocation>()
+            .DistinctBy(l => (l.FilePath, l.Line, l.Column, l.EndLine, l.EndColumn))
             .ToList();
 
         var total = items.Count;
@@ -151,7 +152,10 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
         if (s is not (INamedTypeSymbol or IMethodSymbol or IPropertySymbol or IEventSymbol)) return null;
 
         var impls = await RoslynHelpers.FindImplementationsOrOverridesAsync(s, sol, ct);
-        var items = impls.Select(RoslynHelpers.ToSymbolInfo).ToList();
+        var items = impls
+            .Select(RoslynHelpers.ToSymbolInfo)
+            .DistinctBy(i => (i.SymbolId, i.PrimaryLocation?.FilePath, i.PrimaryLocation?.Line, i.PrimaryLocation?.Column))
+            .ToList();
 
         var total = items.Count;
         if (total > max) { trunc.Add("implementations"); items = items.Take(max).ToList(); }
@@ -168,7 +172,10 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
             ? await SymbolFinder.FindDerivedInterfacesAsync(type, sol, transitive: false, projects: null, ct)
             : await SymbolFinder.FindDerivedClassesAsync(type, sol, transitive: false, projects: null, ct);
 
-        var items = derived.Select(d => RoslynHelpers.ToSymbolInfo(d)).ToList();
+        var items = derived
+            .Select(d => RoslynHelpers.ToSymbolInfo(d))
+            .DistinctBy(i => (i.SymbolId, i.PrimaryLocation?.FilePath, i.PrimaryLocation?.Line, i.PrimaryLocation?.Column))
+            .ToList();
         var total = items.Count;
         if (total > max) { trunc.Add("derivedTypes"); items = items.Take(max).ToList(); }
         return new AnalyzeSymbolSection<Contracts.SymbolInfo>(total, items);
@@ -186,6 +193,7 @@ internal sealed class AnalyzeSymbolTool(IWorkspaceService ws, ILogger<AnalyzeSym
             }))
             .Where(x => x.Location is not null)
             .Select(x => new CallerEntry(RoslynHelpers.ToSymbolInfo(x.CallingSymbol), x.Location!))
+            .DistinctBy(c => (c.Caller.SymbolId, c.CallSite.FilePath, c.CallSite.Line, c.CallSite.Column, c.CallSite.EndLine, c.CallSite.EndColumn))
             .ToList();
 
         var total = items.Count;

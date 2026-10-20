@@ -172,7 +172,7 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
                     continue;
                 }
 
-                var confidence = isPublicSurface || copies.Any(c => ComputeConfidence(c, solution) != "high")
+                var confidence = isPublicSurface || copies.Any(c => ComputeConfidence(c) != "high")
                     ? "medium"
                     : "high";
                 var reason = isPublicSurface
@@ -368,6 +368,11 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
         // record-heavy solution they crowd every real finding out of maxResults (TOOL-006).
         if (symbol.IsImplicitlyDeclared) return true;
 
+        // Explicit interface implementations have DeclaredAccessibility == Private and a metadata-only
+        // name, so they are skipped by the public-API exemption and have 0 direct references when callers
+        // go through the interface or framework (e.g. IDisposable.Dispose) (TOOL-015).
+        if (IsExplicitInterfaceImplementation(symbol)) return true;
+
         if (DenylistMemberNames.Contains(symbol.Name)) return true;
         foreach (var attr in symbol.GetAttributes())
         {
@@ -377,6 +382,16 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
         // Record primary constructors / [Serializable] zero-param ctors — defer for v1.4
         return false;
     }
+
+    private static bool IsExplicitInterfaceImplementation(ISymbol symbol) => symbol switch
+    {
+        IMethodSymbol m => m.MethodKind == MethodKind.ExplicitInterfaceImplementation
+            || !m.ExplicitInterfaceImplementations.IsEmpty
+            || (m.AssociatedSymbol is { } assoc && IsExplicitInterfaceImplementation(assoc)),
+        IPropertySymbol p => !p.ExplicitInterfaceImplementations.IsEmpty,
+        IEventSymbol e => !e.ExplicitInterfaceImplementations.IsEmpty,
+        _ => false,
+    };
 
     private static bool IsInTestProject(ISymbol symbol, Solution sol)
     {
@@ -397,23 +412,14 @@ internal sealed class FindDeadCodeCandidatesTool(IWorkspaceService ws, ILogger<F
         return false;
     }
 
-    private static string ComputeConfidence(ISymbol symbol, Solution sol)
+    private static string ComputeConfidence(ISymbol symbol)
     {
         // Internal members in an assembly with [InternalsVisibleTo("X")] → medium (X could reference it but we didn't find any).
-        var loc = symbol.Locations.FirstOrDefault(l => l.IsInSource);
-        if (loc?.SourceTree is null) return "high";
-        var project = sol.GetDocument(loc.SourceTree)?.Project;
-        if (project is null) return "high";
-
-        var compilation = project.GetCompilationAsync().GetAwaiter().GetResult();
-        if (compilation is null) return "high";
-
-        if (symbol.DeclaredAccessibility == Accessibility.Internal ||
-            symbol.DeclaredAccessibility == Accessibility.ProtectedAndInternal)
+        if (symbol.DeclaredAccessibility is Accessibility.Internal or Accessibility.ProtectedAndInternal
+            && symbol.ContainingAssembly is { } assembly
+            && assembly.GetAttributes().Any(a => a.AttributeClass?.Name == "InternalsVisibleToAttribute"))
         {
-            var hasInternalsVisibleTo = compilation.Assembly.GetAttributes()
-                .Any(a => a.AttributeClass?.Name == "InternalsVisibleToAttribute");
-            return hasInternalsVisibleTo ? "medium" : "high";
+            return "medium";
         }
         return "high";
     }

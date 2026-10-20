@@ -250,4 +250,17 @@ public sealed class FindDeadCodeCandidatesToolTests
         r.Result.Candidates.Should().NotContain(c => c.Symbol.EndsWith("CustomServicesExtensions"));
         r.Result.Skipped.FrameworkReached.Should().BeGreaterThan(0);
     }
+
+    [Test]
+    public async Task Explicit_interface_implementations_are_not_candidates_and_keep_what_they_call_alive()
+    {
+        // TOOL-015: Roslyn gives explicit interface implementations DeclaredAccessibility == Private and a
+        // qualified Name ("System.IDisposable.Dispose"), bypassing both isPublicSurface and DenylistMemberNames.
+        await using var host = await TestHost.CreateAsync<FindDeadCodeCandidatesTool>();
+        var r = await host.Tool.InvokeAsync(maxResults: 1000);
+
+        r.Error.Should().BeNull();
+        r.Result!.Candidates.Should().Contain(c => c.Symbol.Contains("DeadChain.DeadEntry"));
+        r.Result.Candidates.Should().NotContain(c => c.Symbol.Contains("ExplicitContractHolder."));
+    }
 }

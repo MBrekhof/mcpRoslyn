@@ -58,9 +58,10 @@ internal sealed class FindCallersTool(IWorkspaceService ws, ILogger<FindCallersT
             }
 
             var entries = new List<CallerEntry>();
-            var seen = new HashSet<string>();
+            var seen = new HashSet<string> { symbol.OriginalDefinition.ToDisplayString() };
+            var seenSites = new HashSet<(string Caller, string FilePath, int Line, int Column, int EndLine, int EndColumn)>();
 
-            await FindCallersRecursiveAsync(symbol, solution, transitive, entries, seen, ct2);
+            await FindCallersRecursiveAsync(symbol, solution, transitive, entries, seen, seenSites, ct2);
 
             var result = new FindCallersResult(entries);
             if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
@@ -70,23 +71,26 @@ internal sealed class FindCallersTool(IWorkspaceService ws, ILogger<FindCallersT
 
     private static async Task FindCallersRecursiveAsync(
         ISymbol symbol, Solution solution, bool transitive,
-        List<CallerEntry> entries, HashSet<string> seen, CancellationToken ct)
+        List<CallerEntry> entries, HashSet<string> seen,
+        HashSet<(string Caller, string FilePath, int Line, int Column, int EndLine, int EndColumn)> seenSites,
+        CancellationToken ct)
     {
         var callers = await SymbolFinder.FindCallersAsync(symbol, solution, ct);
         foreach (var caller in callers)
         {
+            var callerId = caller.CallingSymbol.OriginalDefinition.ToDisplayString();
+            var callerInfo = RoslynHelpers.ToSymbolInfo(caller.CallingSymbol);
             foreach (var loc in caller.Locations)
             {
                 var site = RoslynHelpers.ToLocation(loc);
                 if (site is null) continue;
-                entries.Add(new CallerEntry(RoslynHelpers.ToSymbolInfo(caller.CallingSymbol), site));
+                if (seenSites.Add((callerId, site.FilePath, site.Line, site.Column, site.EndLine, site.EndColumn)))
+                    entries.Add(new CallerEntry(callerInfo, site));
             }
 
-            if (transitive)
+            if (transitive && seen.Add(callerId))
             {
-                var callerId = caller.CallingSymbol.OriginalDefinition.ToDisplayString();
-                if (seen.Add(callerId))
-                    await FindCallersRecursiveAsync(caller.CallingSymbol, solution, true, entries, seen, ct);
+                await FindCallersRecursiveAsync(caller.CallingSymbol, solution, true, entries, seen, seenSites, ct);
             }
         }
     }

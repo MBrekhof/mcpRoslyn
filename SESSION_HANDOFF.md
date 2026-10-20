@@ -1,9 +1,60 @@
 # Session Handoff
 
-**Last updated:** 2026-09-13 afternoon (VAL-001 closed; its four follow-up cards built with Codex reviews)
+**Last updated:** 2026-10-20 (repository review, 7 bug-fix cards TOOL-015..019 / WS-010 / IDX-006, Archify hero diagram)
 
 **Board-only since 2026-10-03 (SYNC-007).** `TODO.md` is deleted; open work is on the ContextBoard project `mcpRoslyn`
 (`list_cards`). Never recreate `TODO.md` here. Mentions of it below are history.
+
+## What the 2026-10-20 session did
+
+- **Repository review & 7 ContextBoard cards completed (`2246`–`2252`):**
+  - `TOOL-015` (`2246`): `FindDeadCodeCandidatesTool.IsDenylisted` now excludes explicit interface implementations (methods, properties, events, and accessors) via `IsExplicitInterfaceImplementation`.
+  - `TOOL-016` (`2247`): `FindCallersTool` seeds the target symbol into `seen` before recursing and deduplicates multiple call sites within the same caller body.
+  - `WS-010` (`2248`): Removed dead `catch (InvalidOperationException)` in `ToolBase` and added an `options.MSBuildFailure` guard at the top of `WorkspaceService.ReloadAsync`.
+  - `TOOL-017` (`2249`): `FindCalleesTool` inspects syntax references from `PartialDefinitionPart` and `PartialImplementationPart` so partial methods with separated signatures and bodies return their callees.
+  - `IDX-006` (`2250`): `SymbolIndex.Refresh` expands the dirty document walk with existing `DeclaringDocs` when a modified file newly joins an already-indexed partial type or member.
+  - `TOOL-018` (`2251`): `AnalyzeSymbolTool` and `FindDerivedTypesTool` deduplicate references, implementations, derived types, and callers across multi-reference sites and partial declarations.
+  - `TOOL-019` (`2252`): Simplified `FindDeadCodeCandidatesTool.ComputeConfidence` to check `symbol.ContainingAssembly` directly without sync-over-async, fixed NUnit `TestContext.Out.WriteLine` warning in `AcceptanceTests`, and synced `ARCHITECTURE.md` and `README.md`.
+- **Hero architecture diagram:** Added [`docs/images/mcproslyn.architecture.json`](docs/images/mcproslyn.architecture.json), `docs/images/hero-light.png`, and `docs/images/hero-dark.png` rendered and verified with `Archify.Net`. **239 tests pass**, 0 warnings.
+
+## State at 2026-10-03
+
+**No actionable cards.** Six cards are open, all Backlog, each waiting on a trigger named in its body: DIST-001
+(a second machine or user), DIST-002 (evidence that several sessions on one solution would share a workspace;
+roslynk's bridge-spawns-daemon pattern is the reference), DIST-003 (a non-Windows user), TOOL-004 and TOOL-005
+(a real-session case; the user decided on 2026-09-13 to leave both open unbuilt, don't re-propose closing them),
+ARCH-001 (a second language backend). Everything through WS-009 is Done.
+
+**Published exe** is still the v1.4.0 build plus WS-008 (`56409dc`); nothing since changed server code.
+
+## What the 2026-10-03 session did
+
+- **Migrated task state to board-only** (`bbef855`): final sync clean (0 updated, 0 ignored, 0 mismatched),
+  `FileSyncClosed` set for project 23 in the VPS database, the hook confirmed to print the BOARD-ONLY refusal,
+  `TODO.md` deleted, README/CHANGELOG/handoff repointed. The migrated-repo list in the global CLAUDE.md was updated.
+- **Memory consolidation** (`/extract-learnings consolidate`, first run for this project). Two stale memories
+  retired (dead-code limit, now in the global CLAUDE.md; ContextBoard body-indent trap, fixed by SYNC-016 and moot
+  here). Three topic files added: Codex broker orphans (see below), stdio smoke tests must hold stdin open,
+  one `dotnet build`/`test` at a time. Two sentences added to the global CLAUDE.md Codex paragraph: don't dismiss
+  a Codex blocker because your repro passed the line it names (WS-008 proved Codex right), and a review's full scope
+  goes in the first prompt (a follow-up scope message is read as prompt injection).
+- **README/CHANGELOG caught up** (`e08fe2f`): WS-008 and WS-009 one-liners, an `Unreleased` section in CHANGELOG.
+
+## What the 2026-09-22/23 sessions did (never written up until now)
+
+- **WS-008** (`56409dc`): the server degrades instead of dying when the solution or SDK fails to load. A
+  `global.json` pinning an uninstalled SDK made `MSBuildLocator.RegisterDefaults()` throw before anything was served
+  (client saw only "Connection closed"); now it falls back to the SDK next to the exe, every tool answers
+  `WORKSPACE_NOT_LOADED` naming the cause, and `reload_workspace` recovers. Codex's round-1 blocker named exactly
+  this and was wrongly dismissed as unverified because the netwasm repro got past that line; a protocol test from a
+  pinned folder proved it.
+- **WS-009** (closed without code, `b547d07`): orphaned `mcpRoslyn.exe` processes after Codex reviews. The server
+  already exits on stdin EOF and when its parent dies; the leak is the Codex plugin's per-project broker, which
+  starts every server in `~/.codex/config.toml` and outlives the review. Codex's fix (60 s idle shutdown) lives in
+  `C:\Projects\codex-plugin-cc-cleanup`, installed into the plugin cache with `node tools/install-local-cleanup.mjs
+  --apply`; a plugin update overwrites it. A fork to carry it plus upstream #773/#768 was set up and deleted the same
+  evening as not worth the trouble. Diagnosis: `Get-CimInstance Win32_Process -Filter "Name='mcpRoslyn.exe'" |
+  select ProcessId,ParentProcessId,CreationDate,CommandLine`.
 
 ## What the 2026-09-13 VAL-001 session did
 

@@ -64,8 +64,11 @@ internal sealed class FindCalleesTool(IWorkspaceService ws, ILogger<FindCalleesT
 
             var entries = new List<CalleeEntry>();
             var seen = new HashSet<string>();
+            var parts = new ISymbol?[] { method, method.PartialDefinitionPart, method.PartialImplementationPart }
+                .Distinct(SymbolEqualityComparer.Default)
+                .OfType<IMethodSymbol>();
 
-            foreach (var declRef in method.DeclaringSyntaxReferences)
+            foreach (var declRef in parts.SelectMany(p => p.DeclaringSyntaxReferences))
             {
                 var declNode = await declRef.GetSyntaxAsync(ct2);
                 var tree = declNode.SyntaxTree;

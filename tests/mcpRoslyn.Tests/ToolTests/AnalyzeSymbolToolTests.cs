@@ -76,4 +76,43 @@ public sealed class AnalyzeSymbolToolTests
             r.Result.Truncated.Should().Contain("references");
         // Permissive — if fixture happens to have only 1 reference, no truncation expected
     }
+
+    [Test]
+    public async Task References_and_implementations_from_linked_files_are_deduplicated()
+    {
+        // TOOL-018: Linked.cs is compiled into both TestApp and TestWeb, so Roslyn reports every reference,
+        // implementation, derived type, and caller in Linked.cs twice unless analyze_symbol deduplicates them
+        // the way find_references and find_implementations do.
+        await using var host = await TestHost.CreateAsync<AnalyzeSymbolTool>();
+        var linkedPath = Path.Combine(
+            AppContext.BaseDirectory, "Fixtures", "TestSolution", "TestApp", "Linked.cs");
+        var backup = await File.ReadAllTextAsync(linkedPath);
+        try
+        {
+            await File.WriteAllTextAsync(linkedPath,
+                "namespace Shared;\n" +
+                "public class Linked : TestLib.IExplicitContract\n" +
+                "{\n" +
+                "    public int Value => TestLib.DeadChain.Live();\n" +
+                "    public event System.EventHandler? Fired;\n" +
+                "}\n");
+            File.SetLastWriteTimeUtc(linkedPath, DateTime.UtcNow.AddSeconds(1));
+
+            var r = await host.Tool.InvokeAsync(symbolId: "T:TestLib.IExplicitContract");
+            r.Error.Should().BeNull();
+            r.Result!.References!.Items
+                .Select(l => (l.FilePath, l.Line, l.Column, l.EndLine, l.EndColumn))
+                .Should().OnlyHaveUniqueItems();
+            r.Result.References.Count.Should().Be(r.Result.References.Items.Count);
+
+            r.Result.Implementations!.Items
+                .Select(i => (i.SymbolId, i.PrimaryLocation?.FilePath, i.PrimaryLocation?.Line, i.PrimaryLocation?.Column))
+                .Should().OnlyHaveUniqueItems();
+            r.Result.Implementations.Count.Should().Be(r.Result.Implementations.Items.Count);
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(linkedPath, backup);
+        }
+    }
 }

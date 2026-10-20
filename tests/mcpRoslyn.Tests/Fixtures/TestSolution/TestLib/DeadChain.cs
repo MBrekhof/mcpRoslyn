@@ -4,7 +4,11 @@ namespace TestLib;
 // Shared is also called by the public Live, which is never a candidate, so it stays alive.
 public static partial class DeadChain
 {
-    public static int Live() => Shared();
+    public static int Live() => Shared() + Ping(0) + (typeof(ExplicitContractHolder) is not null ? 0 : 1);
+
+    public static int Ping(int n) => n <= 0 ? 0 : Pong(n - 1);
+
+    public static int Pong(int n) => n <= 0 ? 0 : Ping(n - 1);
 
     // The runtime runs a static constructor; nothing in source references it, and what it calls is not dead.
     static DeadChain() => RunsInStaticConstructor();
@@ -31,6 +35,30 @@ public static partial class DeadChain
     private static partial int DeadPartial() => OnlyFromDeadPartial();
 
     private static int OnlyFromDeadPartial() => 3;
+}
+
+public interface IExplicitContract
+{
+    int Value { get; }
+    event System.EventHandler? Fired;
+}
+
+// TOOL-015: explicit interface implementations have DeclaredAccessibility == Private and a qualified Name,
+// so without an explicit-implementation check they were reported as high-confidence dead code alongside
+// any private helpers they call.
+public sealed class ExplicitContractHolder : System.IDisposable, IExplicitContract
+{
+    void System.IDisposable.Dispose() => RunsInExplicitDispose();
+    int IExplicitContract.Value => RunsInExplicitProperty();
+    event System.EventHandler? IExplicitContract.Fired
+    {
+        add => RunsInExplicitEvent();
+        remove => RunsInExplicitEvent();
+    }
+
+    private static void RunsInExplicitDispose() { }
+    private static int RunsInExplicitProperty() => 1;
+    private static void RunsInExplicitEvent() { }
 }
 
 internal sealed class FieldOnlyType

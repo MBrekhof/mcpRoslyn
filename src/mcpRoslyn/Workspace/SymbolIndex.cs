@@ -109,20 +109,22 @@ public sealed class SymbolIndex
         {
             HashSet<DocumentId> dirty;
             HashSet<DocumentId> walk;
+            List<IndexedSymbol> existing;
             Solution solution;
             lock (_gate)
             {
                 if (_dirty.Count == 0 || _solution is null) return _solution;
                 dirty = new(_dirty);
                 solution = _solution;
+                existing = new(_all);
                 walk = new(dirty);
-                foreach (var entry in _all)
-                    if (entry.DeclaringDocs.Overlaps(dirty)) walk.UnionWith(entry.DeclaringDocs);
+                ExpandWalk(walk, dirty, existing);
             }
 
+            var queue = new Queue<DocumentId>(walk);
             var seen = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
             var fresh = new List<PendingEntry>();
-            foreach (var docId in walk)
+            while (queue.TryDequeue(out var docId))
             {
                 ct.ThrowIfCancellationRequested();
                 var doc = solution.GetDocument(docId);
@@ -135,8 +137,22 @@ public sealed class SymbolIndex
                 foreach (var sym in WalkDocumentTypes(semantic))
                 {
                     // A partial type's members declared only in files outside the walk keep their entries.
-                    if (!seen.Add(sym) || Pending(sym, solution) is not { } pending
-                        || !pending.Entry.DeclaringDocs.Overlaps(walk)) continue;
+                    if (Pending(sym, solution) is not { } pending
+                        || !pending.Entry.DeclaringDocs.Overlaps(walk)
+                        || !seen.Add(sym)) continue;
+
+                    // IDX-006: when a dirty file newly joins a partial type or member whose existing part lives in
+                    // an unchanged file, pull that partner file into the walk so its old single-file entry is replaced.
+                    var newlyJoined = new List<DocumentId>();
+                    foreach (var partDoc in pending.Entry.DeclaringDocs)
+                        if (walk.Add(partDoc))
+                        {
+                            newlyJoined.Add(partDoc);
+                            queue.Enqueue(partDoc);
+                        }
+                    if (newlyJoined.Count > 0)
+                        ExpandWalk(walk, newlyJoined, existing, queue);
+
                     fresh.Add(pending);
                 }
             }
@@ -159,6 +175,28 @@ public sealed class SymbolIndex
     }
 
     // ---------- Helpers ----------
+
+    private static void ExpandWalk(
+        HashSet<DocumentId> walk, IEnumerable<DocumentId> seeds,
+        List<IndexedSymbol> existing, Queue<DocumentId>? queue = null)
+    {
+        var frontier = new HashSet<DocumentId>(seeds);
+        while (frontier.Count > 0)
+        {
+            var next = new HashSet<DocumentId>();
+            foreach (var entry in existing)
+            {
+                if (!entry.DeclaringDocs.Overlaps(frontier)) continue;
+                foreach (var docId in entry.DeclaringDocs)
+                    if (walk.Add(docId))
+                    {
+                        next.Add(docId);
+                        queue?.Enqueue(docId);
+                    }
+            }
+            frontier = next;
+        }
+    }
 
     private sealed record PendingEntry(
         IndexedSymbol Entry,

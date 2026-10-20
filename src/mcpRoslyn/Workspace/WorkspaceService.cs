@@ -329,6 +329,9 @@ public sealed class WorkspaceService(McpRoslynOptions options, ILogger<Workspace
         await _gate.WaitAsync(ct);
         try
         {
+            if (options.MSBuildFailure is { } msBuildFailure)
+                throw new WorkspaceNotLoadedException($"Workspace not loaded: {msBuildFailure.Message}", msBuildFailure);
+
             // Explicit argument, then what is serving or configured, then discovery: a solution may have been
             // created since a startup that found none. A served solution that disappeared fails, it is not swapped.
             var path = solutionPath

@@ -51,7 +51,7 @@ public class AcceptanceTests
         coldStartSw.Stop();
 
         var loadedProjects = workspace.LoadedProjectCount;
-        TestContext.WriteLine($"Cold start: {coldStartSw.ElapsedMilliseconds} ms, {loadedProjects} projects loaded.");
+        TestContext.Out.WriteLine($"Cold start: {coldStartSw.ElapsedMilliseconds} ms, {loadedProjects} projects loaded.");
 
         // v1.1+: wait for background warm-up (per-project compilation) AND
         // v1.2: SymbolIndex build. Queries below that hit the index would otherwise
@@ -59,13 +59,13 @@ public class AcceptanceTests
         var warmupSw = Stopwatch.StartNew();
         await workspace.WarmupTask;
         warmupSw.Stop();
-        TestContext.WriteLine($"Warm-up + index build (background, awaited): {warmupSw.ElapsedMilliseconds} ms");
+        TestContext.Out.WriteLine($"Warm-up + index build (background, awaited): {warmupSw.ElapsedMilliseconds} ms");
 
         if (workspace.Diagnostics.Count > 0)
         {
-            TestContext.WriteLine($"MSBuild diagnostics: {workspace.Diagnostics.Count}");
+            TestContext.Out.WriteLine($"MSBuild diagnostics: {workspace.Diagnostics.Count}");
             foreach (var d in workspace.Diagnostics.Take(10))
-                TestContext.WriteLine($"  [{d.Kind}] {d.Message}");
+                TestContext.Out.WriteLine($"  [{d.Kind}] {d.Message}");
         }
 
         // 1) find_references on IGroupPermissionResolver
@@ -75,7 +75,7 @@ public class AcceptanceTests
             symbolId: "T:duetGPT.Services.IGroupPermissionResolver",
             ct: CancellationToken.None);
         refsSw.Stop();
-        TestContext.WriteLine($"find_references(IGroupPermissionResolver): {refsSw.ElapsedMilliseconds} ms, " +
+        TestContext.Out.WriteLine($"find_references(IGroupPermissionResolver): {refsSw.ElapsedMilliseconds} ms, " +
             $"error={refsResult.Error?.Code ?? "null"}, count={refsResult.Result?.References.Count ?? 0}");
 
         // 2) find_implementations on IBuiltInToolProvider
@@ -85,7 +85,7 @@ public class AcceptanceTests
             symbolId: "T:duetGPT.Services.IBuiltInToolProvider",
             ct: CancellationToken.None);
         implsSw.Stop();
-        TestContext.WriteLine($"find_implementations(IBuiltInToolProvider): {implsSw.ElapsedMilliseconds} ms, " +
+        TestContext.Out.WriteLine($"find_implementations(IBuiltInToolProvider): {implsSw.ElapsedMilliseconds} ms, " +
             $"error={implsResult.Error?.Code ?? "null"}, count={implsResult.Result?.Implementations.Count ?? 0}");
 
         // 2b) Same query on a second interface — measures cache-warm cost after (2). Pair locked in
@@ -95,7 +95,7 @@ public class AcceptanceTests
             symbolId: "T:duetGPT.Services.IKnowledgeService",
             ct: CancellationToken.None);
         implsSw2.Stop();
-        TestContext.WriteLine($"find_implementations(IKnowledgeService): {implsSw2.ElapsedMilliseconds} ms, " +
+        TestContext.Out.WriteLine($"find_implementations(IKnowledgeService): {implsSw2.ElapsedMilliseconds} ms, " +
             $"error={implsResult2.Error?.Code ?? "null"}, count={implsResult2.Result?.Implementations.Count ?? 0}");
 
         // 2c) Second find_references symbol — cache-warm timing for the same reason as (2b).
@@ -104,7 +104,7 @@ public class AcceptanceTests
             symbolId: "T:duetGPT.Services.IKnowledgeService",
             ct: CancellationToken.None);
         refsSw2.Stop();
-        TestContext.WriteLine($"find_references(IKnowledgeService): {refsSw2.ElapsedMilliseconds} ms, " +
+        TestContext.Out.WriteLine($"find_references(IKnowledgeService): {refsSw2.ElapsedMilliseconds} ms, " +
             $"error={refsResult2.Error?.Code ?? "null"}, count={refsResult2.Result?.References.Count ?? 0}");
 
         // 3) find_callers on KnowledgeService.ExpandQueryAsync
@@ -115,7 +115,7 @@ public class AcceptanceTests
             transitive: false,
             ct: CancellationToken.None);
         callersSw.Stop();
-        TestContext.WriteLine($"find_callers(KnowledgeService.ExpandQueryAsync): {callersSw.ElapsedMilliseconds} ms, " +
+        TestContext.Out.WriteLine($"find_callers(KnowledgeService.ExpandQueryAsync): {callersSw.ElapsedMilliseconds} ms, " +
             $"error={callersResult.Error?.Code ?? "null"}, count={callersResult.Result?.Callers.Count ?? 0}");
 
         // 4) semantic_search has-attribute:McpServerToolType (should be 0 — duetGPT doesn't use this attribute)
@@ -125,7 +125,7 @@ public class AcceptanceTests
             "has-attribute:ModelContextProtocol.Server.McpServerToolTypeAttribute",
             ct: CancellationToken.None);
         searchSw.Stop();
-        TestContext.WriteLine($"semantic_search(has-attribute:McpServerToolType): {searchSw.ElapsedMilliseconds} ms, " +
+        TestContext.Out.WriteLine($"semantic_search(has-attribute:McpServerToolType): {searchSw.ElapsedMilliseconds} ms, " +
             $"error={searchResult.Error?.Code ?? "null"}, count={searchResult.Result?.Matches.Count ?? 0}");
 
         // Soft assertions — log everything, don't hard-fail since duetGPT may have evolved.

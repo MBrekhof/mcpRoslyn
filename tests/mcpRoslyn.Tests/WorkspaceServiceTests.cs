@@ -457,6 +457,10 @@ public class WorkspaceServiceTests
 
         var refresh = () => sut.GetFreshSolutionAsync();
         (await refresh.Should().ThrowAsync<WorkspaceNotLoadedException>()).WithMessage("*No .NET SDK found*");
+
+        // WS-010: ReloadAsync must also honour MSBuildFailure instead of bypassing it and calling MSBuildWorkspace.Create().
+        var reload = () => sut.ReloadAsync();
+        (await reload.Should().ThrowAsync<WorkspaceNotLoadedException>()).WithMessage("*No .NET SDK found*");
     }
 
     [Test]

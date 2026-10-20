@@ -1,6 +1,6 @@
 # Architecture — mcpRoslyn
 
-Windows-only .NET 10 MCP server exposing 19 Roslyn-backed code-intelligence tools over stdio. Wraps `MSBuildWorkspace` so AI coding agents can run authoritative semantic queries (find-references, goto-definition, find-implementations, semantic-search, rename) instead of text-search heuristics.
+Windows-only .NET 10 MCP server exposing 20 Roslyn-backed code-intelligence tools (plus `echo`) over stdio. Wraps `MSBuildWorkspace` so AI coding agents can run authoritative semantic queries (find-references, goto-definition, find-implementations, semantic-search, rename) instead of text-search heuristics.
 
 ## Topology
 
@@ -20,7 +20,7 @@ One process per Claude Code session, spawned via `mcp.json`. Solution loaded onc
 1. `MSBuildLocator.RegisterDefaults()` **first**, before any `Microsoft.CodeAnalysis.*` type is touched (otherwise MSBuild assembly resolution fails).
 2. Parse args: `--solution <path>` (optional — falls back to walking up from CWD for `*.sln`/`*.slnx`); `--log-level <Debug|Info|Warning|Error>`.
 3. DI host built; `IWorkspaceService` registered as singleton.
-4. `WorkspaceLoaderHostedService` triggers eager `WorkspaceService.LoadAsync` — fail-fast if the solution doesn't load.
+4. `WorkspaceLoaderHostedService` triggers eager `WorkspaceService.LoadAsync` — if loading fails (missing SDK pin, no solution found, bad `--solution`), the failure is recorded and tools answer `WORKSPACE_NOT_LOADED` naming the cause until `reload_workspace` recovers (WS-008).
 5. MCP SDK takes over stdio.
 
 stdout is reserved for MCP frames. All logging goes to **stderr** via `ILogger` (`LogToStandardErrorThreshold = LogLevel.Trace`). A rogue `Console.WriteLine` anywhere will corrupt the protocol stream.
@@ -117,7 +117,7 @@ Analyzer execution failures are returned as Roslyn's `AD0001` diagnostics alongs
 Three layers:
 
 1. **Protocol** — MCP SDK handles malformed JSON-RPC.
-2. **Tool envelope** (`ToolBase.ExecuteAsync`) — catches `FileNotFoundException`, `InvalidOperationException`, generic `Exception`; returns `ToolError { code, message, hint? }`. To the SDK that is an ordinary return value, so a call-tool filter (`Program.cs`, `ToolCallOutcome`) also sets the MCP result's `isError` whenever the returned `ToolResult` carries an `Error` — the payload is unchanged (TOOL-011).
+2. **Tool envelope** (`ToolBase.ExecuteAsync`) — catches `WorkspaceNotLoadedException`, `FileNotFoundException`, `IndexUnavailableException`, `PositionInvalidException`, `AmbiguousSymbolIdException`, and generic `Exception`; returns `ToolError { code, message, hint? }`. To the SDK that is an ordinary return value, so a call-tool filter (`Program.cs`, `ToolCallOutcome`) also sets the MCP result's `isError` whenever the returned `ToolResult` carries an `Error` — the payload is unchanged (TOOL-011).
 3. **Empty results** — `find_references` on an unused symbol returns `[]`, not an error. Empty is not failure.
 
 Codes: `WORKSPACE_NOT_LOADED`, `FILE_NOT_IN_WORKSPACE`, `SYMBOL_NOT_FOUND`, `POSITION_INVALID`, `INVALID_PATTERN`, `RENAME_CONFLICT`, `FILE_READ_ONLY`, `FILE_LOCKED`, `UNSUPPORTED_ENCODING`, `STALE_FILE`, `LINKED_FILE_CONFLICT`, `PARTIAL_WRITE`, `INDEX_UNAVAILABLE`, `AMBIGUOUS_SYMBOL_ID`, `PROJECT_NOT_FOUND`, `SOLUTION_NOT_FOUND`, `INTERNAL_ERROR`.
@@ -136,7 +136,7 @@ src/mcpRoslyn/
   Workspace/              # IWorkspaceService, WorkspaceService
   Tools/                  # one class per tool + ToolBase + RoslynHelpers
 tests/mcpRoslyn.Tests/
-  Fixtures/TestSolution/  # 2-project hand-crafted .sln — exact-count assertions
+  Fixtures/TestSolution/  # 4-project hand-crafted .sln — exact-count assertions
   TestHelpers/            # FixturePaths, TestHost (DI helper for tool tests)
   ToolTests/              # one test class per tool
   WorkspaceServiceTests, AcceptanceTests, SolutionDiscoveryTests

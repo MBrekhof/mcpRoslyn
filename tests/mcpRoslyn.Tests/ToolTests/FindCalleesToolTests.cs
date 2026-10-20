@@ -50,4 +50,25 @@ public sealed class FindCalleesToolTests
         r.Error!.Code.Should().Be("SYMBOL_NOT_FOUND");
         r.Error.Hint.Should().NotBeNullOrEmpty();
     }
+
+    [Test]
+    public async Task Partial_method_resolved_by_symbolId_or_definition_part_returns_callees_from_implementation_part()
+    {
+        // TOOL-017: Roslyn resolves a partial method's symbolId (and a cursor on its defining signature) to the
+        // body-less PartialDefinitionPart; the invocations live on PartialImplementationPart.
+        await using var host = await TestHost.CreateAsync<FindCalleesTool>();
+        var deadChainPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures", "TestSolution", "TestLib", "DeadChain.cs");
+
+        var byId = await host.Tool.InvokeAsync(symbolId: "M:TestLib.DeadChain.DeadPartial");
+        byId.Error.Should().BeNull();
+        byId.Result!.Callees.Select(c => c.Callee.Name)
+            .Should().ContainSingle().Which.Should().Be("OnlyFromDeadPartial");
+
+        var byDefCursor = await host.Tool.InvokeAsync(filePath: deadChainPath, line: 33, column: 32);
+        byDefCursor.Error.Should().BeNull();
+        byDefCursor.Result!.Callees.Select(c => c.Callee.Name)
+            .Should().ContainSingle().Which.Should().Be("OnlyFromDeadPartial");
+    }
 }

@@ -71,4 +71,27 @@ public class ReloadWorkspaceToolTests
         current.Result!.ProjectCount.Should().Be(4, "the solution being served is untouched");
         current.Result.SolutionPath.Should().Be(FixturePaths.TestSolutionPath);
     }
+
+    [Test]
+    public async Task InvalidOperationException_is_reported_as_INTERNAL_ERROR_not_WORKSPACE_NOT_LOADED()
+    {
+        // WS-010: ToolBase had a leftover catch (InvalidOperationException) mapping any InvalidOperationException
+        // to WORKSPACE_NOT_LOADED even when a workspace generation was loaded and serving.
+        await using var host = await TestHost.CreateWorkspaceAsync();
+        var probe = new ThrowingProbeTool(host.Workspace);
+
+        var result = await probe.RunAsync(() => throw new InvalidOperationException("Unexpected failure inside tool"));
+
+        result.Error.Should().NotBeNull();
+        result.Error!.Code.Should().Be("INTERNAL_ERROR");
+        result.Error.Message.Should().Contain("Unexpected failure inside tool");
+    }
+
+    private sealed class ThrowingProbeTool(mcpRoslyn.Workspace.IWorkspaceService ws)
+        : ToolBase(ws, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
+    {
+        public Task<mcpRoslyn.Contracts.ToolResult<ReloadResult>> RunAsync(
+            Func<Task<mcpRoslyn.Contracts.ToolResult<ReloadResult>>> body)
+            => ExecuteAsync(_ => body(), CancellationToken.None);
+    }
 }

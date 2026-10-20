@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "mcpRoslyn system overview",
+    "output": "mcproslyn.html",
+    "locale": "en"
+  },
+  "components": [
+    { "id": "agent", "type": "external", "label": "Claude Code", "sublabel": "MCP client", "pos": [40, 40], "size": [150, 64] },
+    { "id": "host", "type": "backend", "label": "MCP stdio host", "sublabel": "Program + ToolBase", "pos": [300, 40], "size": [150, 64] },
+    { "id": "tools", "type": "backend", "label": "Tool handlers", "sublabel": "20 semantic tools", "pos": [560, 40], "size": [160, 64], "tag": "20 tools" },
+    { "id": "edits", "type": "database", "label": "Working tree", "sublabel": "applyEdits: true", "pos": [830, 40], "size": [150, 64] },
+    { "id": "files", "type": "database", "label": "Solution & source", "sublabel": ".sln / .csproj / .cs", "pos": [40, 200], "size": [150, 64] },
+    { "id": "workspace", "type": "backend", "label": "WorkspaceService", "sublabel": "Generation + mtime", "pos": [300, 200], "size": [150, 64] },
+    { "id": "roslyn", "type": "backend", "label": "MSBuildWorkspace", "sublabel": "MSBuildLocator + Roslyn", "pos": [560, 200], "size": [160, 64] },
+    { "id": "analyzers", "type": "security", "label": "Project analyzers", "sublabel": "DiagnosticSuppressor", "pos": [830, 200], "size": [150, 64] },
+    { "id": "symindex", "type": "backend", "label": "SymbolIndex", "sublabel": "attr / returns / params", "pos": [300, 360], "size": [150, 64] },
+    { "id": "invindex", "type": "backend", "label": "InvocationIndex", "sublabel": "routes / DI / workers", "pos": [560, 360], "size": [160, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "mcpRoslyn.exe (single-file win-x64)", "wraps": ["host", "tools", "workspace", "roslyn", "symindex", "invindex"] }
+  ],
+  "connections": [
+    { "id": "agent-to-host", "from": "agent", "to": "host", "label": "MCP stdio", "variant": "emphasis" },
+    { "id": "host-to-tools", "from": "host", "to": "tools", "label": "ToolResult<T>", "variant": "emphasis" },
+    { "id": "tools-to-edits", "from": "tools", "to": "edits", "label": "rename_symbol", "variant": "dashed" },
+    { "id": "host-to-workspace", "from": "host", "to": "workspace", "label": "LoadAsync", "labelDy": 24, "variant": "emphasis" },
+    { "id": "files-to-workspace", "from": "files", "to": "workspace", "label": "mtime + watcher" },
+    { "id": "workspace-to-roslyn", "from": "workspace", "to": "roslyn", "label": "OpenSolution", "variant": "emphasis" },
+    { "id": "tools-to-roslyn", "from": "tools", "to": "roslyn", "label": "semantic query", "labelDy": 24, "variant": "emphasis" },
+    { "id": "roslyn-to-analyzers", "from": "roslyn", "to": "analyzers", "label": "with analyzers" },
+    { "id": "workspace-to-symindex", "from": "workspace", "to": "symindex", "label": "warm-up + dirty", "labelDy": 24, "variant": "emphasis" },
+    { "id": "roslyn-to-invindex", "from": "roslyn", "to": "invindex", "label": "syntax + semantic", "labelDy": 24, "variant": "emphasis" },
+    { "id": "symindex-to-invindex", "from": "symindex", "to": "invindex", "label": "shared generation" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "20 semantic tools", "items": ["Navigation: find_references, goto_definition, hover, workspace_symbol", "Search & call graph: semantic_search, analyze_symbol, callers/callees", "Architecture & cleanup: entrypoints, DI registrations, dead code"] },
+    { "dot": "emerald", "title": "Live workspace generations", "items": ["Per-call mtime diff updates changed .cs syntax trees in 5-20 ms", "SymbolIndex and InvocationIndex fold dirty documents in on demand", "FileSystemWatcher flags added/deleted files or changed build props"] },
+    { "dot": "rose", "title": "Safety & resilience", "items": ["Survives missing SDK or solution at startup with WORKSPACE_NOT_LOADED", "Failed reload keeps the serving generation and its indexes intact", "Read-only by default; only rename_symbol with applyEdits writes"] }
+  ]
+}

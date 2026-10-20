@@ -41,4 +41,26 @@ public class FindCallersToolTests
         result.Error.Hint.Should().NotBeNullOrEmpty();
         result.Error.Hint.Should().Contain("workspace_symbol");
     }
+
+    [Test]
+    public async Task Transitive_callers_on_cyclic_call_graph_do_not_duplicate_call_sites()
+    {
+        // TOOL-016: DeadChain.Ping <-> DeadChain.Pong form a cycle and DeadChain.Live calls Ping.
+        // Without seeding the root symbol into `seen`, transitive traversal revisited Ping via Pong
+        // and emitted the Live -> Ping and Pong -> Ping call sites a second time.
+        await using var host = await TestHost.CreateAsync<FindCallersTool>();
+
+        var result = await host.Tool.InvokeAsync(
+            filePath: null, line: null, column: null,
+            symbolId: "M:TestLib.DeadChain.Ping(System.Int32)",
+            transitive: true, ct: CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        result.Result.Should().NotBeNull();
+        result.Result!.Callers.Select(c => c.Caller.Name)
+            .Should().BeEquivalentTo(["Live", "Pong", "Ping"]);
+        result.Result.Callers
+            .Select(c => (c.Caller.SymbolId, c.CallSite.FilePath, c.CallSite.Line, c.CallSite.Column))
+            .Should().OnlyHaveUniqueItems();
+    }
 }

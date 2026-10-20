@@ -558,4 +558,59 @@ public class SymbolIndexTests
             File.WriteAllText(first, backup);
         }
     }
+
+    [Test]
+    public async Task Joining_an_existing_type_from_another_file_replaces_its_single_file_entry()
+    {
+        // IDX-006: MarkedType is declared only in MyAttribute.cs at build time. When EnglishGreeter.cs is edited
+        // to add a second partial part of MarkedType, the old single-file entry ({ MyAttribute.cs }) did not
+        // overlap the dirty set ({ EnglishGreeter.cs }) and was left behind alongside the new two-file entry.
+        var options = new McpRoslynOptions { SolutionPath = FixturePaths.TestSolutionPath };
+        await using var sut = new WorkspaceService(options, NullLogger<WorkspaceService>.Instance);
+        await sut.LoadAsync();
+        await sut.WarmupTask;
+
+        var docs = (await sut.GetFreshSolutionAsync()).Projects.SelectMany(p => p.Documents).ToList();
+        var myAttrPath = docs.First(d => d.Name == "MyAttribute.cs").FilePath!;
+        var greeterPath = docs.First(d => d.Name == "EnglishGreeter.cs").FilePath!;
+        var myAttrBackup = File.ReadAllText(myAttrPath);
+        var greeterBackup = File.ReadAllText(greeterPath);
+        try
+        {
+            File.WriteAllText(myAttrPath, myAttrBackup.Replace("public class MarkedType", "public partial class MarkedType"));
+            File.SetLastWriteTimeUtc(myAttrPath, DateTime.UtcNow.AddSeconds(1));
+            await sut.ReloadAsync();
+            await sut.WarmupTask;
+
+            File.WriteAllText(greeterPath, greeterBackup + "\npublic partial class MarkedType { }\n");
+            File.SetLastWriteTimeUtc(greeterPath, DateTime.UtcNow.AddSeconds(2));
+            var refreshed = await sut.GetFreshSolutionAsync();
+
+            sut.SymbolIndex.QueryAttribute("TestLib.MyMarkerAttribute", refreshed)
+                .Where(m => m.Name == "MarkedType")
+                .Should().ContainSingle();
+            sut.SymbolIndex.AllSymbols(refreshed).Symbols
+                .Where(e => e.SymbolId == "T:TestLib.MarkedType")
+                .Should().ContainSingle()
+                .Which.DeclaringDocs.Should().HaveCount(2);
+
+            // Now remove [MyMarker] from MyAttribute.cs while removing the partial stub from EnglishGreeter.cs:
+            // if the old single-file entry from before the join survived in _byAttribute, [MyMarker] would still match.
+            File.WriteAllText(myAttrPath, myAttrBackup
+                .Replace("[MyMarker]\r\npublic class MarkedType", "public partial class MarkedType")
+                .Replace("[MyMarker]\npublic class MarkedType", "public partial class MarkedType"));
+            File.WriteAllText(greeterPath, greeterBackup);
+            File.SetLastWriteTimeUtc(myAttrPath, DateTime.UtcNow.AddSeconds(3));
+            File.SetLastWriteTimeUtc(greeterPath, DateTime.UtcNow.AddSeconds(3));
+            var afterRemove = await sut.GetFreshSolutionAsync();
+
+            sut.SymbolIndex.QueryAttribute("TestLib.MyMarkerAttribute", afterRemove)
+                .Should().NotContain(m => m.Name == "MarkedType");
+        }
+        finally
+        {
+            File.WriteAllText(myAttrPath, myAttrBackup);
+            File.WriteAllText(greeterPath, greeterBackup);
+        }
+    }
 }

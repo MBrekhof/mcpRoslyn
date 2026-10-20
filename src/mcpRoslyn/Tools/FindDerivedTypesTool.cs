@@ -51,7 +51,10 @@ internal sealed class FindDerivedTypesTool(IWorkspaceService ws, ILogger<FindDer
                 ? await SymbolFinder.FindDerivedInterfacesAsync(named, solution, transitive, projects: null, ct2)
                 : await SymbolFinder.FindDerivedClassesAsync(named, solution, transitive, projects: null, ct2);
 
-            var results = derived.Select(RoslynHelpers.ToSymbolInfo).ToList();
+            var results = derived
+                .Select(RoslynHelpers.ToSymbolInfo)
+                .DistinctBy(i => (i.SymbolId, i.PrimaryLocation?.FilePath, i.PrimaryLocation?.Line, i.PrimaryLocation?.Column))
+                .ToList();
             var result = new FindDerivedTypesResult(results);
             if (string.Equals(format, "summary", StringComparison.OrdinalIgnoreCase))
                 return Contracts.ToolResult<FindDerivedTypesResult>.OkSummary($"{result.DerivedTypes.Count} derived types");
