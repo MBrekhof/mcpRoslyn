@@ -1,11 +1,13 @@
 # mcpRoslyn
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
-  <img alt="mcpRoslyn system overview rendered by Archify.Net: Claude Code talks over MCP stdio to mcpRoslyn.exe (MCP stdio host, 20 tool handlers, WorkspaceService, MSBuildWorkspace, SymbolIndex, and InvocationIndex), reading solution and source files, running project analyzers, and optionally writing rename edits to the working tree." src="docs/images/hero-light.png">
-</picture>
+<a href="https://mbrekhof.github.io/mcpRoslyn/">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
+    <img alt="mcpRoslyn system overview rendered by Archify.Net: Claude Code talks over MCP stdio to mcpRoslyn.exe (MCP stdio host, 20 tool handlers, WorkspaceService, MSBuildWorkspace, SymbolIndex, and InvocationIndex), reading solution and source files, running project analyzers, and optionally writing rename edits to the working tree." src="docs/images/hero-light.png">
+  </picture>
+</a>
 
-<sub>Rendered from [`docs/images/mcproslyn.architecture.json`](docs/images/mcproslyn.architecture.json) by `archify finalize architecture` (`Archify.Net`).</sub>
+<sub><a href="https://mbrekhof.github.io/mcpRoslyn/">Open interactive diagram ↗</a> · Rendered from [`docs/images/mcproslyn.architecture.json`](docs/images/mcproslyn.architecture.json) by `archify finalize architecture` (`Archify.Net`).</sub>
 
 MCP server exposing C# symbol-level navigation (find-references, goto-definition, find-implementations, semantic-search, rename, etc.) to AI coding agents. Wraps Roslyn's `MSBuildWorkspace` and serves over stdio.
 
